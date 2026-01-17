@@ -114,12 +114,17 @@ def resolve_frontend_tools(
     }
 
     install_cmd = [tool, *install_args[name]]
-    dev_cmd = [tool, *dev_args[name], "--port", str(vite_port)]
+    dev_cmd = [
+        tool,
+        *dev_args[name],
+        "--clearScreen=false",
+        f"--port={vite_port}",
+    ]
 
     if all_ifaces:
         dev_cmd.append("--host")
-    elif vite_host:
-        dev_cmd.extend(["--host", vite_host])
+    elif vite_host and vite_host != "localhost":
+        dev_cmd.append(f"--host={vite_host}")
 
     if name == "bun":
         stderr.write(BUN_BUG)
