@@ -4,7 +4,7 @@ import subprocess
 from pathlib import Path
 from sys import stderr
 
-from hatchling.builders.hooks.plugin.interface import BuildHookInterface
+from hatchling.builders.hooks.plugin.interface import BuildHookInterface  # type: ignore
 
 exec(Path(__file__).with_name("util.py").read_text("UTF-8"))  # noqa: S102
 
@@ -23,7 +23,7 @@ class CustomBuildHook(BuildHookInterface):
         super().initialize(version, build_data)
         stderr.write(">>> Building the frontend\n")
 
-        install_cmd, build_cmd = find_build_tool()
+        install_cmd, build_cmd = find_build_tool()  # noqa # type: ignore
 
         try:
             run(install_cmd, cwd="frontend")
