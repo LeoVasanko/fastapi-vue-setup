@@ -17,6 +17,7 @@ import subprocess
 import sys
 import tomllib
 from pathlib import Path
+from textwrap import indent
 
 import tomli_w
 
@@ -413,21 +414,21 @@ def patch_frontend_health_check(frontend_dir: Path, dry_run: bool = False) -> bo
     # For App.vue (minimal): insert before the last </p> in template
     if "HelloWorld" in str(target_file):
         # Insert before closing </h3>
-        h3_close = content.find("</h3>")
-        if h3_close != -1:
-            content = (
-                f"{content[:h3_close]}\n{STATUS_SPAN_TEMPLATE}    {content[h3_close:]}"
-            )
+        h3_close = content.find("    </h3>")
+        if h3_close == -1:
+            return False
+        before, after = content[:h3_close], content[h3_close:]
+        content = f"{before}{indent(STATUS_SPAN_TEMPLATE, '  ')}{after}"
     else:
         # Minimal App.vue - insert before the last </p> before </template>
         template_end = content.find("</template>")
         if template_end != -1:
             # Find last </p> before </template>
-            last_p = content.rfind("</p>", 0, template_end)
-            if last_p != -1:
-                content = (
-                    f"{content[:last_p]}\n{STATUS_SPAN_TEMPLATE}  {content[last_p:]}"
-                )
+            last_p = content.rfind("  </p>", 0, template_end)
+            if last_p == -1:
+                return False
+            before, after = content[:last_p], content[last_p:]
+            content = f"{before}{STATUS_SPAN_TEMPLATE}{after}"
 
     target_file.write_text(content)
     print(f"✅ Patched {target_file}")
