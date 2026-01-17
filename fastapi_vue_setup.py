@@ -35,14 +35,10 @@ TEMPLATE_DIR = Path(__file__).parent / "template"
 
 # pyproject.toml additions for patched projects
 PYPROJECT_ADDITIONS = {
-    "project": {
-        "dependencies": [
-            "fastapi-vue>=0.1.0",
-        ],
-    },
     "tool": {
         "hatch": {
             "build": {
+                "packages": ["{{MODULE_NAME}}"],
                 "artifacts": ["{{MODULE_NAME}}/frontend-build"],
                 "targets": {
                     "sdist": {
@@ -315,6 +311,136 @@ def patch_vite_config(
     return True
 
 
+def patch_frontend_health_check(frontend_dir: Path, dry_run: bool = False) -> bool:
+    """Patch Vue app to include FastAPI backend health check.
+
+    Tries HelloWorld.vue first (full demo), then falls back to App.vue (minimal).
+    Works with both JS and TS versions created by create-vue.
+    """
+    # Find the file to patch - prefer HelloWorld.vue, fall back to App.vue
+    target_file = None
+    
+    # Try HelloWorld.vue first (full demo app)
+    hello_world = frontend_dir / "src" / "components" / "HelloWorld.vue"
+    if hello_world.exists():
+        target_file = hello_world
+    else:
+        # Try finding HelloWorld.vue elsewhere
+        for path in frontend_dir.glob("src/**/HelloWorld.vue"):
+            target_file = path
+            break
+    
+    # Fall back to App.vue (minimal app)
+    if target_file is None:
+        app_vue = frontend_dir / "src" / "App.vue"
+        if app_vue.exists():
+            target_file = app_vue
+
+    if target_file is None:
+        print("⚠️  No Vue file found to patch, skipping frontend health check")
+        return False
+
+    content = target_file.read_text()
+
+    # Check if already patched
+    if "/api/health" in content:
+        print(f"⚠️  Skipping {target_file} (already patched)")
+        return False
+
+    if dry_run:
+        print(f"[DRY RUN] Would patch {target_file}")
+        return True
+
+    # Detect if TypeScript (has lang="ts" in script tag)
+    is_typescript = 'lang="ts"' in content
+
+    # Build the script content based on JS/TS
+    if is_typescript:
+        script_addition = '''
+import { ref, onMounted } from 'vue'
+
+const backendStatus = ref<'checking' | 'connected' | 'error'>('checking')
+
+onMounted(async () => {
+  try {
+    const res = await fetch('/api/health')
+    backendStatus.value = res.ok ? 'connected' : 'error'
+  } catch {
+    backendStatus.value = 'error'
+  }
+})
+'''
+    else:
+        script_addition = '''
+import { ref, onMounted } from 'vue'
+
+const backendStatus = ref('checking')
+
+onMounted(async () => {
+  try {
+    const res = await fetch('/api/health')
+    backendStatus.value = res.ok ? 'connected' : 'error'
+  } catch {
+    backendStatus.value = 'error'
+  }
+})
+'''
+
+    # Template addition - inline status indicator (no wrapper, fits in existing text)
+    status_span = '''<span class="backend-status">
+      — FastAPI backend:
+      <span v-if="backendStatus === 'checking'">⏳</span>
+      <span v-else-if="backendStatus === 'connected'" class="connected">✓ connected</span>
+      <span v-else class="error">✗ not reachable</span>
+    </span>'''
+
+    style_addition = '''
+.backend-status {
+  white-space: nowrap;
+}
+
+.backend-status .connected {
+  color: hsla(160, 100%, 37%, 1);
+}
+
+.backend-status .error {
+  color: hsla(0, 100%, 50%, 1);
+}
+'''
+
+    # Insert script addition before </script>
+    script_end_match = re.search(r"</script>", content)
+    if script_end_match:
+        insert_pos = script_end_match.start()
+        content = content[:insert_pos] + script_addition + content[insert_pos:]
+
+    # Insert status inline - find the best place based on file type
+    # For HelloWorld.vue: insert before </h3>
+    # For App.vue (minimal): insert before the last </p> in template
+    if "HelloWorld" in str(target_file):
+        # Insert before closing </h3>
+        h3_close = content.find("</h3>")
+        if h3_close != -1:
+            content = content[:h3_close] + "\n      " + status_span + "\n    " + content[h3_close:]
+    else:
+        # Minimal App.vue - insert before the last </p> before </template>
+        template_end = content.find("</template>")
+        if template_end != -1:
+            # Find last </p> before </template>
+            last_p = content.rfind("</p>", 0, template_end)
+            if last_p != -1:
+                content = content[:last_p] + "\n    " + status_span + "\n  " + content[last_p:]
+
+    # Insert style addition before </style>
+    style_end = content.rfind("</style>")
+    if style_end != -1:
+        content = content[:style_end] + style_addition + content[style_end:]
+
+    target_file.write_text(content)
+    print(f"✅ Patched {target_file}")
+    return True
+
+
 def write_file(
     path: Path, content: str, overwrite: bool = True, dry_run: bool = False
 ) -> bool:
@@ -340,18 +466,17 @@ def merge_pyproject(data: dict, additions: dict, module_name: str) -> dict:
     """Merge additions into pyproject.toml data."""
     result = data.copy()
 
+    # Ensure hatchling build system is configured
+    if "build-system" not in result:
+        result["build-system"] = {}
+    result["build-system"]["requires"] = ["hatchling"]
+    result["build-system"]["build-backend"] = "hatchling.build"
+
     # Add dependencies
     if "project" not in result:
         result["project"] = {}
     if "dependencies" not in result["project"]:
         result["project"]["dependencies"] = []
-
-    for dep in additions["project"]["dependencies"]:
-        if not any(
-            dep.split("[")[0].split(">")[0] in d
-            for d in result["project"]["dependencies"]
-        ):
-            result["project"]["dependencies"].append(dep)
 
     # Add hatch build config
     if "tool" not in result:
@@ -362,6 +487,9 @@ def merge_pyproject(data: dict, additions: dict, module_name: str) -> dict:
         result["tool"]["hatch"]["build"] = {}
 
     hatch_build = additions["tool"]["hatch"]["build"]
+    result["tool"]["hatch"]["build"]["packages"] = [
+        p.replace("{{MODULE_NAME}}", module_name) for p in hatch_build["packages"]
+    ]
     result["tool"]["hatch"]["build"]["artifacts"] = [
         a.replace("{{MODULE_NAME}}", module_name) for a in hatch_build["artifacts"]
     ]
@@ -435,15 +563,11 @@ def ensure_python_project(project_dir: Path, dry_run: bool = False) -> bool:
         print("❌ uv init failed")
         return False
 
-    # Remove hello.py if created
-    hello_py = project_dir / "hello.py"
-    if hello_py.exists():
-        hello_py.unlink()
-
-    # Remove .python-version if created
-    python_version = project_dir / ".python-version"
-    if python_version.exists():
-        python_version.unlink()
+    # Remove files created by uv init that we don't need
+    for filename in ["hello.py", "main.py", ".python-version"]:
+        filepath = project_dir / filename
+        if filepath.exists():
+            filepath.unlink()
 
     return True
 
@@ -656,6 +780,9 @@ def cmd_setup(args: argparse.Namespace) -> int:
             print("⚠️  No vite.config.ts or vite.config.js found in frontend/")
             print("   Run create-vue first to generate a Vite config to patch.")
 
+        # Patch Vue app with backend health check
+        patch_frontend_health_check(frontend_dir, dry_run)
+
     # === Update pyproject.toml ===
     pyproject_path = project_dir / "pyproject.toml"
     if pyproject_path.exists():
@@ -676,6 +803,27 @@ def cmd_setup(args: argparse.Namespace) -> int:
             with open(pyproject_path, "wb") as f:
                 tomli_w.dump(updated, f)
             print(f"✅ Updated {pyproject_path}")
+
+    # === Add dependencies using uv ===
+    if dry_run:
+        print("[DRY RUN] Would run: uv add 'fastapi[standard]' fastapi-vue")
+        print("[DRY RUN] Would run: uv add --group dev httpx")
+    else:
+        print("📦 Adding dependencies...")
+        result = subprocess.run(
+            ["uv", "add", "fastapi[standard]", "fastapi-vue"],
+            cwd=project_dir,
+            check=False,
+        )
+        if result.returncode != 0:
+            print("⚠️  Failed to add main dependencies")
+        result = subprocess.run(
+            ["uv", "add", "--group", "dev", "httpx"],
+            cwd=project_dir,
+            check=False,
+        )
+        if result.returncode != 0:
+            print("⚠️  Failed to add dev dependencies")
 
     # === Update .gitignore ===
     gitignore_path = project_dir / ".gitignore"
@@ -701,21 +849,22 @@ def cmd_setup(args: argparse.Namespace) -> int:
     print("=" * 60)
     print("✅ Setup complete!")
     print("=" * 60)
+
+    # Show cd command only if project is not in current directory
+    cd_cmd = "" if project_dir == Path.cwd() else f"cd {project_dir}\n   "
+    script_name = module_name.replace("_", "-")
+
     print(f"""
 Next steps:
 
-1. Install dependencies:
-   cd {project_dir}
-   uv sync
+1. Build for production:
+   {cd_cmd}uv build
 
 2. Start development server:
-   uv run scripts/devserver.py
+   {cd_cmd}uv run scripts/devserver.py
 
-3. Build for production:
-   uv build
-
-4. Run production server:
-   uv run {module_name.replace("_", "-")}
+3. Run production server:
+   {cd_cmd}uv run {script_name}
 """)
 
     return 0

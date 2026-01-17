@@ -14,24 +14,26 @@ const backendUrl =
   process.env.VITE_BACKEND_URL || "http://localhost:{{BACKEND_PORT}}";
 const vitePort = parseInt(process.env.VITE_PORT || "{{VITE_PORT}}");
 
-export default {
-  name: "fastapi-vite",
-  config: () => ({
-    server: {
-      host: "localhost",
-      port: vitePort,
-      strictPort: true,
-      proxy: {
-        "/api": {
-          target: backendUrl,
-          changeOrigin: false,
-          ws: true,
+export default function fastapiVue() {
+  return {
+    name: "fastapi-vite",
+    config: () => ({
+      server: {
+        host: "localhost",
+        port: vitePort,
+        strictPort: true,
+        proxy: {
+          "/api": {
+            target: backendUrl,
+            changeOrigin: false,
+            ws: true,
+          },
         },
       },
-    },
-    build: {
-      outDir: "../{{MODULE_NAME}}/frontend-build",
-      emptyOutDir: true,
-    },
-  }),
-};
+      build: {
+        outDir: "../{{MODULE_NAME}}/frontend-build",
+        emptyOutDir: true,
+      },
+    }),
+  };
+}
