@@ -21,6 +21,11 @@ from textwrap import indent
 
 import tomli_w
 
+try:
+    from _version import __version__
+except ImportError:
+    __version__ = "0.0.0+unknown"
+
 # Template directory
 TEMPLATE_DIR = Path(__file__).parent / "template"
 
@@ -895,6 +900,11 @@ Examples:
     parser.add_argument("--module-name", help="Python module name (auto-detected)")
     parser.add_argument(
         "--dry-run", action="store_true", help="Show what would be done"
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
     )
 
     args = parser.parse_args()
