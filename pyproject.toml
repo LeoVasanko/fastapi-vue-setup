@@ -1,0 +1,29 @@
+[build-system]
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[project]
+name = "fastapi-vue-setup"
+dynamic = ["version"]
+description = "Tool to create or patch FastAPI+Vue projects with integrated build/dev systems"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "tomli-w>=1.0.0",
+]
+
+[project.urls]
+Homepage = "https://git.zi.fi/LeoVasanko/fastapi-vue-setup"
+Repository = "https://github.com/LeoVasanko/fastapi-vue-setup"
+
+[project.scripts]
+fastapi-vue-setup = "fastapi_vue_setup:main"
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.targets.wheel]
+include = ["fastapi_vue_setup.py", "template/**/*", "_version.py"]
+
+[dependency-groups]
+dev = ["ruff"]
