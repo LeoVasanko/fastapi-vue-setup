@@ -31,37 +31,39 @@ uvx fastapi-vue-setup my-app
 ### Create a new project
 
 ```sh
-fastapi-vue-setup new my-app
+fastapi-vue-setup my-app
 ```
 
 This will:
 
 1. Run `uv init my-app`
-2. Run `npm create vue@latest frontend` (interactive)
+2. Run `create-vue frontend` (interactive - choose your Vue options)
 3. Patch the project with FastAPI integration
+4. Install dependencies via `uv add`
 
 ### Patch an existing project
 
+If you have an existing project with `pyproject.toml` or `frontend/`, run without arguments to see the safety prompt, then confirm with:
+
 ```bash
-fastapi-vue-setup patch /path/to/project
+cd /path/to/project
+fastapi-vue-setup .
 ```
+
+### CLI Options
+
+```
+fastapi-vue-setup [project-dir] [options]
 
 Options:
-
-- `--module-name NAME`: Python module name (auto-detected from pyproject.toml)
-- `--vite-port PORT`: Vite dev server port (default: 5173)
-- `--backend-port PORT`: Backend API port in dev mode (default: 5174)
-- `--prod-port PORT`: Production server port (default: 8000)
-- `--force`: Overwrite existing files
-- `--dry-run`: Preview changes without modifying files
-
-### Update an existing project
-
-```bash
-fastapi-vue-setup update /path/to/project
+  --module-name NAME    Python module name (auto-detected from pyproject.toml)
+  --vite-port PORT      Vite dev server port (default: 5173)
+  --backend-port PORT   Backend API port in dev mode (default: 5180)
+  --prod-port PORT      Production server port (default: 5080)
+  --dry-run             Preview changes without modifying files
 ```
 
-Same as `patch --force` - overwrites template files with latest versions.
+Port options can be used to reconfigure an already-patched project.
 
 ## Port Configuration
 
@@ -70,12 +72,12 @@ The tool uses three distinct ports:
 | Port | Purpose               | Used by                        |
 | ---- | --------------------- | ------------------------------ |
 | 5173 | Vite dev server (HMR) | `npm run dev` via devserver.py |
-| 5174 | FastAPI in dev mode   | uvicorn via devserver.py       |
-| 8000 | Production server     | `uv run my-app`                |
+| 5180 | FastAPI in dev mode   | uvicorn via devserver.py       |
+| 5080 | Production server     | `uv run my-app`                |
 
-In development, you access the app at `http://localhost:5173`. Vite proxies `/api/*` requests to FastAPI at port 5174.
+In development, you access the app at `http://localhost:5173`. Vite proxies `/api/*` requests to FastAPI at port 5180.
 
-In production, FastAPI serves both the API and static files from the same port (8000).
+In production, FastAPI serves both the API and static files from port 5080.
 
 ## Project Structure
 
