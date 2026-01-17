@@ -44,6 +44,71 @@ PYPROJECT_ADDITIONS = {
 }
 
 
+# Frontend instantiation block for patching existing apps
+FRONTEND_BLOCK = """
+# Vue Frontend static files
+frontend = Frontend(
+    Path(__file__).with_name("frontend-build"), spa=True, cached=["/assets/"]
+)
+"""
+
+# TypeScript health check script for Vue components
+TS_HEALTH_CHECK_SCRIPT = """\
+import { ref, onMounted } from 'vue'
+
+const backendStatus = ref<'checking' | 'connected' | 'error'>('checking')
+
+onMounted(async () => {
+  try {
+    const res = await fetch('/api/health')
+    backendStatus.value = res.ok ? 'connected' : 'error'
+  } catch {
+    backendStatus.value = 'error'
+  }
+})
+"""
+
+# JavaScript health check script for Vue components
+JS_HEALTH_CHECK_SCRIPT = """\
+import { ref, onMounted } from 'vue'
+
+const backendStatus = ref('checking')
+
+onMounted(async () => {
+  try {
+    const res = await fetch('/api/health')
+    backendStatus.value = res.ok ? 'connected' : 'error'
+  } catch {
+    backendStatus.value = 'error'
+  }
+})
+"""
+
+# Status indicator template for Vue components
+STATUS_SPAN_TEMPLATE = """\
+    <span style="white-space: nowrap">
+      — FastAPI:
+      <span v-if="backendStatus === 'checking'">⏳</span>
+      <span v-else-if="backendStatus === 'connected'">✅</span>
+      <span v-else>❌ not reachable</span>
+    </span>
+"""
+
+# Setup complete message template
+SETUP_COMPLETE_MESSAGE = """
+Next steps:
+
+1. Build for production:
+   CD_CMDuv build
+
+2. Start development server:
+   CD_CMDuv run scripts/devserver.py
+
+3. Run production server:
+   CD_CMDuv run SCRIPT_NAME
+"""
+
+
 # =============================================================================
 # Utility functions
 # =============================================================================
@@ -149,16 +214,6 @@ def patch_app_file(
     lines = content.split("\n")
     import_line = "from fastapi_vue import Frontend"
 
-    # Frontend instantiation block - use module_name for the frontend-build path
-    frontend_block = """
-# Frontend static file server - configure options here
-frontend = Frontend(
-    Path(__file__).parent / "frontend-build",
-    spa=True,
-    favicon="/assets/favicon",
-    cached=["/assets/"],
-)
-"""
     route_line = f'frontend.route({app_var}, "/")'
 
     # Find last import line and check if pathlib is imported
@@ -179,7 +234,7 @@ frontend = Frontend(
         lines.insert(last_import_idx + 1, "from pathlib import Path")
         last_import_idx += 1
     lines.insert(last_import_idx + 1, import_line)
-    lines.insert(last_import_idx + 2, frontend_block)
+    lines.insert(last_import_idx + 2, FRONTEND_BLOCK)
 
     # Append route at end
     lines.append("")
@@ -343,44 +398,9 @@ def patch_frontend_health_check(frontend_dir: Path, dry_run: bool = False) -> bo
     is_typescript = 'lang="ts"' in content
 
     # Build the script content based on JS/TS
-    if is_typescript:
-        script_addition = """
-import { ref, onMounted } from 'vue'
-
-const backendStatus = ref<'checking' | 'connected' | 'error'>('checking')
-
-onMounted(async () => {
-  try {
-    const res = await fetch('/api/health')
-    backendStatus.value = res.ok ? 'connected' : 'error'
-  } catch {
-    backendStatus.value = 'error'
-  }
-})
-"""
-    else:
-        script_addition = """
-import { ref, onMounted } from 'vue'
-
-const backendStatus = ref('checking')
-
-onMounted(async () => {
-  try {
-    const res = await fetch('/api/health')
-    backendStatus.value = res.ok ? 'connected' : 'error'
-  } catch {
-    backendStatus.value = 'error'
-  }
-})
-"""
-
-    # Template addition - inline status indicator using emoji for colors
-    status_span = """<span style="white-space: nowrap">
-      — FastAPI:
-      <span v-if="backendStatus === 'checking'">⏳</span>
-      <span v-else-if="backendStatus === 'connected'">✅</span>
-      <span v-else>❌ not reachable</span>
-    </span>"""
+    script_addition = (
+        TS_HEALTH_CHECK_SCRIPT if is_typescript else JS_HEALTH_CHECK_SCRIPT
+    )
 
     # Insert script addition before </script>
     script_end_match = re.search(r"</script>", content)
@@ -396,7 +416,7 @@ onMounted(async () => {
         h3_close = content.find("</h3>")
         if h3_close != -1:
             content = (
-                f"{content[:h3_close]}\n      {status_span}\n    {content[h3_close:]}"
+                f"{content[:h3_close]}\n{STATUS_SPAN_TEMPLATE}    {content[h3_close:]}"
             )
     else:
         # Minimal App.vue - insert before the last </p> before </template>
@@ -405,7 +425,9 @@ onMounted(async () => {
             # Find last </p> before </template>
             last_p = content.rfind("</p>", 0, template_end)
             if last_p != -1:
-                content = f"{content[:last_p]}\n    {status_span}\n  {content[last_p:]}"
+                content = (
+                    f"{content[:last_p]}\n{STATUS_SPAN_TEMPLATE}  {content[last_p:]}"
+                )
 
     target_file.write_text(content)
     print(f"✅ Patched {target_file}")
@@ -625,12 +647,12 @@ def cmd_setup(args: argparse.Namespace) -> int:
     if dry_run:
         print("\n🏃 DRY RUN MODE - no changes will be made\n")
 
-    # Step 1: Ensure Python project exists
-    if not ensure_python_project(project_dir, dry_run):
+    # Step 1: Ensure frontend exists (do this first so cancellation doesn't leave partial setup)
+    if not ensure_frontend(project_dir, dry_run):
         return 1
 
-    # Step 2: Ensure frontend exists
-    if not ensure_frontend(project_dir, dry_run):
+    # Step 2: Ensure Python project exists
+    if not ensure_python_project(project_dir, dry_run):
         return 1
 
     # Detect module name
@@ -819,18 +841,10 @@ def cmd_setup(args: argparse.Namespace) -> int:
     cd_cmd = "" if project_dir == Path.cwd() else f"cd {project_dir}\n   "
     script_name = module_name.replace("_", "-")
 
-    print(f"""
-Next steps:
-
-1. Build for production:
-   {cd_cmd}uv build
-
-2. Start development server:
-   {cd_cmd}uv run scripts/devserver.py
-
-3. Run production server:
-   {cd_cmd}uv run {script_name}
-""")
+    message = SETUP_COMPLETE_MESSAGE.replace("CD_CMD", cd_cmd).replace(
+        "SCRIPT_NAME", script_name
+    )
+    print(message)
 
     return 0
 
@@ -875,7 +889,7 @@ Examples:
         "project_dir",
         nargs="?",
         default=None,
-        help="Project directory (default: current directory)",
+        help="Project directory (use . for current directory)",
     )
     parser.add_argument("--module-name", help="Python module name (auto-detected)")
     parser.add_argument(
@@ -884,26 +898,9 @@ Examples:
 
     args = parser.parse_args()
 
-    # Handle default project directory with safety check
     if args.project_dir is None:
-        cwd = Path.cwd()
-        if not is_uninitialized_folder(cwd) and not is_already_patched(cwd):
-            print(
-                "⚠️  Current directory contains an existing project that hasn't been patched yet."
-            )
-            print()
-            print(
-                "   If you want to set up FastAPI+Vue integration in the current directory, run:"
-            )
-            print("       fastapi-vue-setup .")
-            print()
-            print("   Or specify a new project directory:")
-            print("       fastapi-vue-setup my-new-project")
-            print()
-            print("   Python project will be at root, while Vue lives in frontend/.")
-            print()
-            return 1
-        args.project_dir = "."
+        parser.print_help()
+        return 0
 
     return cmd_setup(args)
 

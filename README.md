@@ -63,7 +63,16 @@ Options:
 
 In development, you access the Vite dev server at `http://localhost:5173`. Vite proxies `/api/*` requests to FastAPI at port 5180. Ports and hosts of Vite and FastAPI are configurable by `devserver.py` arguments.
 
-In production, FastAPI serves both the API and static files at `http://localhost:5080`. Configurable by `host:port` argument.
+In production, FastAPI serves both the API and static files at `http://localhost:5080`. Configurable by `host:port` argument with defaults set in `__main__.py`
+
+## Main CLI
+
+If your project didn't already have `__main__.py`, we create one that runs the FastAPI app with richer configuration than what the FastAPI CLI offers. Running your module starts it in production mode, and optionally host:port may be given as argument to specify where it listens.
+
+If you are running behind a reverse proxy like [Caddy](https://caddyserver.com/) on localhost, your app will trust the proxy headers it sends. However, if you need to configure another proxy host or IP, set `FORWARDED_ALLOW_IPS` env variable before running the server.
+
+The devserver script depends on this CLI entry for running the backend. You will have to modify the `devserver.py` script if your app has its own incompatible main module. Note that we set FastAPI debug mode and Uvicorn reload when configured via `FASTAPI_VUE_BACKEND_URL` env variable (set by `devserver.py`), while for normal production use these stay disabled. The same variable also controls static files serving (disabled in dev mode).
+
 
 ## Vite Plugin Configuration
 
@@ -108,7 +117,7 @@ my-app/
 └── pyproject.toml
 ```
 
-The project directory tree looks roughly like this after project creation or patching. The script finds your existing fastpi app module and other files and patches them with minimal changes to enable the Vue-FastAPI interconnection. New Python and Vue projects are created automatically if none exist.
+The project directory tree looks roughly like this after project creation or patching. The script finds your existing app module and other files and patches them with minimal changes to enable the Vue-FastAPI interconnection. New Python and Vue projects are created automatically if none exist.
 
 ## Development Workflow
 

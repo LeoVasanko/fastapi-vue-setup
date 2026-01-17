@@ -6,20 +6,20 @@ import uvicorn
 from fastapi_vue.hostutil import parse_endpoint
 from uvicorn import Config, Server
 
-from .app import app
+from .APP_MODULE import APP_VAR
 
 DEFAULT_PORT = 5080
 
 
 def run_server(endpoints: list[dict], *, proxy="", devmode=False):
-    conf: dict[str, object] = {"app": "MODULE_NAME.app:app"}
+    conf: dict[str, object] = {"app": "MODULE_NAME.APP_MODULE:APP_VAR"}
     if proxy:
         conf["proxy_headers"] = True
         conf["forwarded_allow_ips"] = proxy
     if devmode:
         conf["reload"] = True
         conf["reload_dirs"] = ["MODULE_NAME"]
-        app.debug = True
+        APP_VAR.debug = True
 
     if len(endpoints) > 1:
         # Run separate servers for multiple endpoints
