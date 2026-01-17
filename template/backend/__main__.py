@@ -1,30 +1,53 @@
-import sys
+import argparse
+import asyncio
+import os
 
 import uvicorn
+from fastapi_vue.hostutil import parse_endpoint
+from uvicorn import Config, Server
+
+from .app import app
+
+DEFAULT_PORT = 5080
+
+
+def run_server(endpoints: list[dict], *, proxy="", devmode=False):
+    conf: dict[str, object] = {"app": "MODULE_NAME.app:app"}
+    if proxy:
+        conf["proxy_headers"] = True
+        conf["forwarded_allow_ips"] = proxy
+    if devmode:
+        conf["reload"] = True
+        conf["reload_dirs"] = ["MODULE_NAME"]
+        app.debug = True
+
+    if len(endpoints) > 1:
+        # Run separate servers for multiple endpoints
+        async def serve_all():
+            async with asyncio.TaskGroup() as tg:
+                for ep in endpoints:
+                    tg.create_task(Server(Config(**conf, **ep)).serve())
+
+        asyncio.run(serve_all())
+    else:
+        uvicorn.run(**conf, **endpoints[0])
 
 
 def main():
-    """Run the FastAPI application using uvicorn."""
-
-    if len(sys.argv) > 1:
-        endpoint = sys.argv[1]
-        if ":" in endpoint:
-            host, port = endpoint.rsplit(":", 1)
-            host = host or "localhost"
-            port = int(port)
-        else:
-            host = "localhost"
-            port = int(endpoint)
-    else:
-        host = "localhost"
-        port = 5080
-
-    uvicorn.run(
-        "MODULE_NAME.app:app",
-        host=host,
-        port=port,
-        log_level="info",
+    parser = argparse.ArgumentParser(description="Run the MODULE_NAME server.")
+    parser.add_argument(
+        "endpoint",
+        nargs="?",
+        help=(
+            f"Endpoint (default: localhost:{DEFAULT_PORT}). "
+            "Forms: host:port | :port | [ipv6]:port | ip | host | unix:/path.sock"
+        ),
     )
+    args = parser.parse_args()
+    proxy = os.getenv("FORWARDED_ALLOW_IPS", "127.0.0.1,::1")
+    devmode = bool(os.getenv("FASTAPI_VUE_FRONTEND_URL"))
+    endpoints = parse_endpoint(args.endpoint, DEFAULT_PORT)
+    run_server(endpoints, proxy=proxy, devmode=devmode)
 
 
 if __name__ == "__main__":
