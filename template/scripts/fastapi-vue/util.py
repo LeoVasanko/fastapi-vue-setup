@@ -51,10 +51,9 @@ def find_build_tool():
         "npm": ("install",),
         "bun": ("--bun", "install"),
     }
-    # Use build-only for deno to avoid npm-run-all2 issues with run-p
-    # (run-p tries to spawn npm which doesn't exist in deno)
+    # Run vite directly for deno to avoid npm-run-all2/run-p issues
     build = {
-        "deno": ("task", "build-only"),
+        "deno": ("run", "-A", "npm:vite", "build"),
         "npm": ("run", "build"),
         "bun": ("--bun", "run", "build"),
     }
