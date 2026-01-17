@@ -2,22 +2,22 @@
 """Run Vite development server for frontend and FastAPI backend with auto-reload.
 
 Usage:
-    uv run scripts/devserver.py [host:port]
+    uv run scripts/devserver.py [host:port] [--backend host:port]
 
 The optional host:port argument sets where the Vite frontend listens.
 Supported forms: host[:port], :port (all interfaces), or just port.
-Backend always listens on localhost:{{BACKEND_PORT}}.
+The --backend option sets where the FastAPI backend listens (default: localhost:5180).
 
 Environment:
     JS_RUNTIME          Path or name of JS runtime to use (deno, npm/node or bun).
     FASTAPI_VUE_FRONTEND_URL    Set by this script for the backend to know where Vite is.
 """
 
+import argparse
 import asyncio
 import contextlib
 import ipaddress
 import os
-import sys
 from pathlib import Path
 from sys import stderr
 from urllib.parse import urlparse
@@ -27,9 +27,15 @@ import httpx
 exec((Path(__file__).parent / "fastapi-vue/util.py").read_text("UTF-8"))  # noqa: S102
 
 DEFAULT_HOST = "localhost"
-DEFAULT_VITE_PORT = {{VITE_PORT}}
-BACKEND_PORT = {{BACKEND_PORT}}
+DEFAULT_VITE_PORT = 5173
+DEFAULT_BACKEND_PORT = 5180
 FRONTEND_PATH = Path(__file__).parent.parent / "frontend"
+
+EPILOG = """
+  scripts/devserver.py                       # Default ports on localhost
+  scripts/devserver.py 3000                  # Vite on localhost:3000
+  scripts/devserver.py :3000 --backend 8000  # *:3000, localhost:8000
+"""
 
 BUN_BUG = """\
 ┃ ⚠️  Bun cannot correctly proxy API requests to the backend.
@@ -39,13 +45,15 @@ BUN_BUG = """\
 """
 
 
-def parse_endpoint(value: str | None) -> tuple[str | None, int, bool]:
-    """Parse an endpoint for Vite (no unix socket support).
+def parse_endpoint(
+    value: str | None, default_port: int = DEFAULT_VITE_PORT
+) -> tuple[str | None, int, bool]:
+    """Parse an endpoint for Vite or backend.
 
     Returns (host, port, all_ifaces).
     """
     if not value:
-        return DEFAULT_HOST, DEFAULT_VITE_PORT, False
+        return DEFAULT_HOST, default_port, False
 
     # Port only (numeric) -> localhost:port
     if value.isdigit():
@@ -64,12 +72,12 @@ def parse_endpoint(value: str | None) -> tuple[str | None, int, bool]:
             ipaddress.IPv6Address(value)
         except ValueError as e:
             raise SystemExit(f"Invalid IPv6 address '{value}': {e}") from e
-        return value, DEFAULT_VITE_PORT, False
+        return value, default_port, False
 
     # Use urllib.parse for everything else
     parsed = urlparse(f"//{value}")
     host = parsed.hostname or DEFAULT_HOST
-    port = parsed.port or DEFAULT_VITE_PORT
+    port = parsed.port or default_port
 
     return host, port, False
 
@@ -86,7 +94,7 @@ def resolve_frontend_tools(
         stderr.write(f"┃ ⚠️  Frontend source not found at {FRONTEND_PATH}\n")
         raise SystemExit(1)
 
-    result = find_js_runtime()
+    result = find_js_runtime()  # noqa # type: ignore
     if result is None:
         if not os.environ.get("JS_RUNTIME"):
             stderr.write("┃ ⚠️  deno, npm or bun needed to run the frontend server.\n")
@@ -119,13 +127,13 @@ def resolve_frontend_tools(
     return install_cmd, dev_cmd, name
 
 
-async def wait_for_backend():
+async def wait_for_backend(backend_host: str, backend_port: int):
     """Wait for the backend to be ready by polling the health endpoint."""
     max_attempts = 50
     async with httpx.AsyncClient() as client:
         for attempt in range(max_attempts):
             try:
-                await client.get(f"http://localhost:{BACKEND_PORT}", timeout=1.0)
+                await client.get(f"http://{backend_host}:{backend_port}", timeout=1.0)
                 stderr.write("✓ Backend ready!\n")
                 return True
             except httpx.RequestError:
@@ -155,7 +163,11 @@ async def _terminate_process(proc: asyncio.subprocess.Process, name: str) -> Non
 
 
 async def run_devserver(
-    vite_host: str | None, vite_port: int, all_ifaces: bool
+    vite_host: str | None,
+    vite_port: int,
+    all_ifaces: bool,
+    backend_host: str,
+    backend_port: int,
 ) -> None:
     """Run the development server with install, backend, and frontend."""
     install_cmd, dev_cmd, tool_name = resolve_frontend_tools(
@@ -167,7 +179,7 @@ async def run_devserver(
         f"http://{vite_host or 'localhost'}:{vite_port}"
     )
     # Tell Vite where the backend is (for proxying /api requests)
-    os.environ["VITE_BACKEND_URL"] = f"http://localhost:{BACKEND_PORT}"
+    os.environ["FASTAPI_VUE_BACKEND_URL"] = f"http://{backend_host}:{backend_port}"
     cwd = str(Path(__file__).parent.parent)
     frontend_cwd = str(FRONTEND_PATH)
 
@@ -187,11 +199,11 @@ async def run_devserver(
         # Start backend (concurrent with install)
         backend_cmd = [
             "uvicorn",
-            "{{MODULE_NAME}}.app:app",
+            "MODULE_NAME.app:app",
             "--host",
-            "localhost",
+            backend_host,
             "--port",
-            str(BACKEND_PORT),
+            str(backend_port),
             "--reload",
         ]
         stderr.write(f">>> {' '.join(backend_cmd)}\n")
@@ -200,7 +212,7 @@ async def run_devserver(
         # Wait for install to complete and backend to be ready
         install_task = asyncio.create_task(install_proc.wait(), name="install")
         backend_ready_task = asyncio.create_task(
-            wait_for_backend(), name="backend_ready"
+            wait_for_backend(backend_host, backend_port), name="backend_ready"
         )
 
         done, pending = await asyncio.wait(
@@ -257,11 +269,33 @@ async def run_devserver(
 
 
 def main():
-    hostport = sys.argv[1] if len(sys.argv) > 1 else None
-    vite_host, vite_port, all_ifaces = parse_endpoint(hostport)
+    parser = argparse.ArgumentParser(
+        description="Run Vite and FastAPI development servers",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=EPILOG,
+    )
+    parser.add_argument(
+        "frontend",
+        nargs="?",
+        metavar="host:port",
+        help="Vite frontend endpoint (default: localhost:5173)",
+    )
+    parser.add_argument(
+        "--backend",
+        metavar="host:port",
+        help="FastAPI backend endpoint (default: localhost:5180)",
+    )
+    args = parser.parse_args()
+
+    vite_host, vite_port, all_ifaces = parse_endpoint(args.frontend, DEFAULT_VITE_PORT)
+    backend_host, backend_port, _ = parse_endpoint(args.backend, DEFAULT_BACKEND_PORT)
+    # Backend host defaults to localhost (never None)
+    backend_host = backend_host or DEFAULT_HOST
 
     with contextlib.suppress(KeyboardInterrupt):
-        asyncio.run(run_devserver(vite_host, vite_port, all_ifaces))
+        asyncio.run(
+            run_devserver(vite_host, vite_port, all_ifaces, backend_host, backend_port)
+        )
 
 
 if __name__ == "__main__":

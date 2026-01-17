@@ -6,34 +6,30 @@
  * - Builds to the Python module's frontend-build directory
  *
  * Environment variables (with defaults):
- *   VITE_PORT=5173        - Vite dev server port
- *   VITE_BACKEND_URL=http://localhost:5180 - Backend API URL for proxying
+ *   FASTAPI_VUE_BACKEND_URL=http://localhost:5180 - Backend API URL for proxying
  */
 
-const backendUrl =
-  process.env.VITE_BACKEND_URL || "http://localhost:{{BACKEND_PORT}}";
-const vitePort = parseInt(process.env.VITE_PORT || "{{VITE_PORT}}");
+const backendUrl = process.env.FASTAPI_VUE_BACKEND_URL || "http://localhost:5180"
 
-export default function fastapiVue() {
+export default function fastapiVue({ paths = ["/api"] } = {}) {
+  // Build proxy configuration for each path
+  const proxy = {}
+  for (const path of paths) {
+    proxy[path] = {
+      target: backendUrl,
+      changeOrigin: false,
+      ws: true,
+    }
+  }
+
   return {
     name: "fastapi-vite",
     config: () => ({
-      server: {
-        host: "localhost",
-        port: vitePort,
-        strictPort: true,
-        proxy: {
-          "/api": {
-            target: backendUrl,
-            changeOrigin: false,
-            ws: true,
-          },
-        },
-      },
+      server: { proxy },
       build: {
-        outDir: "../{{MODULE_NAME}}/frontend-build",
+        outDir: "../MODULE_NAME/frontend-build",
         emptyOutDir: true,
       },
     }),
-  };
+  }
 }

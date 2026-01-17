@@ -7,12 +7,7 @@ Usage:
 
 Options:
     --module-name NAME      Python module name (auto-detected from pyproject.toml)
-    --vite-port PORT        Vite dev server port (default: 5173)
-    --backend-port PORT     Backend API port in dev mode (default: 5180)
-    --prod-port PORT        Production server port (default: 5080)
     --dry-run               Show what would be done without making changes
-
-Port options update existing files when specified, allowing reconfiguration.
 """
 
 import argparse
@@ -25,11 +20,6 @@ from pathlib import Path
 
 import tomli_w
 
-# Port configuration (keeping them distinct)
-DEFAULT_VITE_PORT = 5173  # Vite dev server (frontend HMR)
-DEFAULT_BACKEND_PORT = 5180  # FastAPI in dev mode (Vite proxies /api here)
-DEFAULT_PROD_PORT = 5080  # Production server (static files served by FastAPI)
-
 # Template directory
 TEMPLATE_DIR = Path(__file__).parent / "template"
 
@@ -38,8 +28,8 @@ PYPROJECT_ADDITIONS = {
     "tool": {
         "hatch": {
             "build": {
-                "packages": ["{{MODULE_NAME}}"],
-                "artifacts": ["{{MODULE_NAME}}/frontend-build"],
+                "packages": ["MODULE_NAME"],
+                "artifacts": ["MODULE_NAME/frontend-build"],
                 "targets": {
                     "sdist": {
                         "hooks": {
@@ -123,10 +113,10 @@ def _find_app_in_file(path: Path) -> str | None:
 
 
 def render_template(template: str, **kwargs) -> str:
-    """Simple template rendering with {{KEY}} placeholders."""
+    """Simple template rendering replacing KEY with value."""
     result = template
     for key, value in kwargs.items():
-        result = result.replace(f"{{{{{key}}}}}", str(value))
+        result = result.replace(key, value)
     return result
 
 
@@ -227,7 +217,7 @@ frontend = Frontend(
 
     if not lifespan_patched:
         # Check if they're using deprecated on_event
-        if "@" + app_var + ".on_event" in content or f"@{app_var}.on_event" in content:
+        if f"@{app_var}.on_event" in content:
             print()
             print("⚠️  Your app uses the deprecated @app.on_event decorator.")
             print("   Please migrate to the lifespan pattern and add:")
@@ -246,8 +236,6 @@ frontend = Frontend(
 def patch_vite_config(
     path: Path,
     module_name: str,
-    backend_port: int,
-    vite_port: int,
     dry_run: bool = False,
 ) -> bool:
     """Patch an existing vite.config.js/ts by adding fastapi-vue plugin.
@@ -319,7 +307,7 @@ def patch_frontend_health_check(frontend_dir: Path, dry_run: bool = False) -> bo
     """
     # Find the file to patch - prefer HelloWorld.vue, fall back to App.vue
     target_file = None
-    
+
     # Try HelloWorld.vue first (full demo app)
     hello_world = frontend_dir / "src" / "components" / "HelloWorld.vue"
     if hello_world.exists():
@@ -329,7 +317,7 @@ def patch_frontend_health_check(frontend_dir: Path, dry_run: bool = False) -> bo
         for path in frontend_dir.glob("src/**/HelloWorld.vue"):
             target_file = path
             break
-    
+
     # Fall back to App.vue (minimal app)
     if target_file is None:
         app_vue = frontend_dir / "src" / "App.vue"
@@ -356,7 +344,7 @@ def patch_frontend_health_check(frontend_dir: Path, dry_run: bool = False) -> bo
 
     # Build the script content based on JS/TS
     if is_typescript:
-        script_addition = '''
+        script_addition = """
 import { ref, onMounted } from 'vue'
 
 const backendStatus = ref<'checking' | 'connected' | 'error'>('checking')
@@ -369,9 +357,9 @@ onMounted(async () => {
     backendStatus.value = 'error'
   }
 })
-'''
+"""
     else:
-        script_addition = '''
+        script_addition = """
 import { ref, onMounted } from 'vue'
 
 const backendStatus = ref('checking')
@@ -384,29 +372,15 @@ onMounted(async () => {
     backendStatus.value = 'error'
   }
 })
-'''
+"""
 
-    # Template addition - inline status indicator (no wrapper, fits in existing text)
-    status_span = '''<span class="backend-status">
-      — FastAPI backend:
+    # Template addition - inline status indicator using emoji for colors
+    status_span = """<span style="white-space: nowrap">
+      — FastAPI:
       <span v-if="backendStatus === 'checking'">⏳</span>
-      <span v-else-if="backendStatus === 'connected'" class="connected">✓ connected</span>
-      <span v-else class="error">✗ not reachable</span>
-    </span>'''
-
-    style_addition = '''
-.backend-status {
-  white-space: nowrap;
-}
-
-.backend-status .connected {
-  color: hsla(160, 100%, 37%, 1);
-}
-
-.backend-status .error {
-  color: hsla(0, 100%, 50%, 1);
-}
-'''
+      <span v-else-if="backendStatus === 'connected'">✅</span>
+      <span v-else>❌ not reachable</span>
+    </span>"""
 
     # Insert script addition before </script>
     script_end_match = re.search(r"</script>", content)
@@ -421,7 +395,9 @@ onMounted(async () => {
         # Insert before closing </h3>
         h3_close = content.find("</h3>")
         if h3_close != -1:
-            content = content[:h3_close] + "\n      " + status_span + "\n    " + content[h3_close:]
+            content = (
+                f"{content[:h3_close]}\n      {status_span}\n    {content[h3_close:]}"
+            )
     else:
         # Minimal App.vue - insert before the last </p> before </template>
         template_end = content.find("</template>")
@@ -429,12 +405,7 @@ onMounted(async () => {
             # Find last </p> before </template>
             last_p = content.rfind("</p>", 0, template_end)
             if last_p != -1:
-                content = content[:last_p] + "\n    " + status_span + "\n  " + content[last_p:]
-
-    # Insert style addition before </style>
-    style_end = content.rfind("</style>")
-    if style_end != -1:
-        content = content[:style_end] + style_addition + content[style_end:]
+                content = f"{content[:last_p]}\n    {status_span}\n  {content[last_p:]}"
 
     target_file.write_text(content)
     print(f"✅ Patched {target_file}")
@@ -442,7 +413,11 @@ onMounted(async () => {
 
 
 def write_file(
-    path: Path, content: str, overwrite: bool = True, dry_run: bool = False
+    path: Path,
+    content: str,
+    overwrite: bool = True,
+    dry_run: bool = False,
+    executable: bool = False,
 ) -> bool:
     """Write content to a file, handling existing files and dry-run."""
     exists = path.exists()
@@ -457,6 +432,8 @@ def write_file(
 
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content)
+    if executable and sys.platform != "win32":
+        path.chmod(path.stat().st_mode | 0o111)
     action = "Updated" if exists else "Created"
     print(f"✅ {action} {path}")
     return True
@@ -488,10 +465,10 @@ def merge_pyproject(data: dict, additions: dict, module_name: str) -> dict:
 
     hatch_build = additions["tool"]["hatch"]["build"]
     result["tool"]["hatch"]["build"]["packages"] = [
-        p.replace("{{MODULE_NAME}}", module_name) for p in hatch_build["packages"]
+        p.replace("MODULE_NAME", module_name) for p in hatch_build["packages"]
     ]
     result["tool"]["hatch"]["build"]["artifacts"] = [
-        a.replace("{{MODULE_NAME}}", module_name) for a in hatch_build["artifacts"]
+        a.replace("MODULE_NAME", module_name) for a in hatch_build["artifacts"]
     ]
     result["tool"]["hatch"]["build"]["only-packages"] = hatch_build["only-packages"]
 
@@ -573,9 +550,12 @@ def ensure_python_project(project_dir: Path, dry_run: bool = False) -> bool:
 
 
 def ensure_frontend(project_dir: Path, dry_run: bool = False) -> bool:
-    """Ensure frontend directory exists, run create-vue if needed."""
+    """Ensure frontend directory exists with a Vue project, run create-vue if needed."""
     frontend_dir = project_dir / "frontend"
-    if frontend_dir.exists():
+    package_json = frontend_dir / "package.json"
+
+    # Check for package.json, not just directory existence (empty dir shouldn't count)
+    if package_json.exists():
         return True
 
     # Find JS runtime
@@ -632,13 +612,6 @@ def cmd_setup(args: argparse.Namespace) -> int:
     project_dir = project_dir.resolve()
     dry_run = args.dry_run
 
-    # Check if port options were explicitly specified (for updating existing files)
-    ports_specified = (
-        args.vite_port != DEFAULT_VITE_PORT
-        or args.backend_port != DEFAULT_BACKEND_PORT
-        or args.prod_port != DEFAULT_PROD_PORT
-    )
-
     # Create project directory if it doesn't exist
     if not project_dir.exists():
         if dry_run:
@@ -667,24 +640,15 @@ def cmd_setup(args: argparse.Namespace) -> int:
         module_name = project_dir.name.replace("-", "_")
         print(f"📦 Using module name from directory: {module_name}")
 
-    # Ports
-    vite_port = args.vite_port
-    backend_port = args.backend_port
-    prod_port = args.prod_port
-
     # Title for templates
     project_title = module_name.replace("_", " ").title()
 
     print(f"📦 Module: {module_name}")
-    print(f"🔌 Ports: Vite={vite_port}, Backend(dev)={backend_port}, Prod={prod_port}")
 
     # Template variables
     tpl_vars = {
         "MODULE_NAME": module_name,
         "PROJECT_TITLE": project_title,
-        "VITE_PORT": vite_port,
-        "BACKEND_PORT": backend_port,
-        "PROD_PORT": prod_port,
     }
 
     module_dir = project_dir / module_name
@@ -725,7 +689,14 @@ def cmd_setup(args: argparse.Namespace) -> int:
     for dest_path, template_path in script_files:
         template = load_template(template_path)
         content = render_template(template, **tpl_vars)
-        write_file(dest_path, content, overwrite=True, dry_run=dry_run)
+        is_executable = dest_path.name == "devserver.py"
+        write_file(
+            dest_path,
+            content,
+            overwrite=True,
+            dry_run=dry_run,
+            executable=is_executable,
+        )
 
     # === Handle app module ===
     if app_file:
@@ -748,12 +719,10 @@ def cmd_setup(args: argparse.Namespace) -> int:
 
     # === Handle __main__.py ===
     main_file = module_dir / "__main__.py"
-    if not main_file.exists() or ports_specified:
+    if not main_file.exists():
         template = load_template("backend/__main__.py")
         content = render_template(template, **tpl_vars)
-        write_file(main_file, content, overwrite=True, dry_run=dry_run)
-    else:
-        print(f"⚠️  Skipping {main_file} (exists, use --prod-port to update)")
+        write_file(main_file, content, overwrite=False, dry_run=dry_run)
 
     # === Update vite.config.js/ts ===
     frontend_dir = project_dir / "frontend"
@@ -769,13 +738,9 @@ def cmd_setup(args: argparse.Namespace) -> int:
         vite_config_js = frontend_dir / "vite.config.js"
 
         if vite_config_ts.exists():
-            patch_vite_config(
-                vite_config_ts, module_name, backend_port, vite_port, dry_run
-            )
+            patch_vite_config(vite_config_ts, module_name, dry_run)
         elif vite_config_js.exists():
-            patch_vite_config(
-                vite_config_js, module_name, backend_port, vite_port, dry_run
-            )
+            patch_vite_config(vite_config_js, module_name, dry_run)
         else:
             print("⚠️  No vite.config.ts or vite.config.js found in frontend/")
             print("   Run create-vue first to generate a Vite config to patch.")
@@ -904,7 +869,6 @@ Examples:
   fastapi-vue-setup my-new-project     Create a new project from scratch
   fastapi-vue-setup .                  Set up integration in current directory
   fastapi-vue-setup . --dry-run        Preview what would be done
-  fastapi-vue-setup . --vite-port 3000 Update port configuration
 """,
     )
     parser.add_argument(
@@ -914,24 +878,6 @@ Examples:
         help="Project directory (default: current directory)",
     )
     parser.add_argument("--module-name", help="Python module name (auto-detected)")
-    parser.add_argument(
-        "--vite-port",
-        type=int,
-        default=DEFAULT_VITE_PORT,
-        help=f"Vite dev server port (default: {DEFAULT_VITE_PORT})",
-    )
-    parser.add_argument(
-        "--backend-port",
-        type=int,
-        default=DEFAULT_BACKEND_PORT,
-        help=f"Backend API port in dev mode (default: {DEFAULT_BACKEND_PORT})",
-    )
-    parser.add_argument(
-        "--prod-port",
-        type=int,
-        default=DEFAULT_PROD_PORT,
-        help=f"Production server port (default: {DEFAULT_PROD_PORT})",
-    )
     parser.add_argument(
         "--dry-run", action="store_true", help="Show what would be done"
     )

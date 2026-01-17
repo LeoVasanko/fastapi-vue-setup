@@ -1,11 +1,10 @@
-"""Entry point for the application."""
-
 import sys
+
+import uvicorn
 
 
 def main():
     """Run the FastAPI application using uvicorn."""
-    import uvicorn
 
     if len(sys.argv) > 1:
         endpoint = sys.argv[1]
@@ -18,10 +17,10 @@ def main():
             port = int(endpoint)
     else:
         host = "localhost"
-        port = {{PROD_PORT}}
+        port = 5080
 
     uvicorn.run(
-        "{{MODULE_NAME}}.app:app",
+        "MODULE_NAME.app:app",
         host=host,
         port=port,
         log_level="info",
