@@ -16,17 +16,15 @@ Environment:
 import argparse
 import asyncio
 import contextlib
-import ipaddress
 import os
 from pathlib import Path
 from sys import stderr
-from urllib.parse import urlparse
 
 import httpx
+from fastapi_vue.hostutil import parse_endpoint
 
 exec((Path(__file__).parent / "fastapi-vue/util.py").read_text("UTF-8"))  # noqa: S102
 
-DEFAULT_HOST = "localhost"
 DEFAULT_VITE_PORT = 5173
 DEFAULT_BACKEND_PORT = 5180
 FRONTEND_PATH = Path(__file__).parent.parent / "frontend"
@@ -45,45 +43,8 @@ BUN_BUG = """\
 """
 
 
-def parse_endpoint(
-    value: str | None, default_port: int = DEFAULT_VITE_PORT
-) -> tuple[str | None, int, bool]:
-    """Parse an endpoint for Vite or backend.
-
-    Returns (host, port, all_ifaces).
-    """
-    if not value:
-        return DEFAULT_HOST, default_port, False
-
-    # Port only (numeric) -> localhost:port
-    if value.isdigit():
-        return DEFAULT_HOST, int(value), False
-
-    # Leading colon :port -> bind all interfaces
-    if value.startswith(":") and value != ":":
-        port_part = value[1:]
-        if not port_part.isdigit():
-            raise SystemExit(f"Invalid port in '{value}'")
-        return None, int(port_part), True
-
-    # Unbracketed IPv6 (cannot safely contain a port)
-    if value.count(":") > 1 and not value.startswith("["):
-        try:
-            ipaddress.IPv6Address(value)
-        except ValueError as e:
-            raise SystemExit(f"Invalid IPv6 address '{value}': {e}") from e
-        return value, default_port, False
-
-    # Use urllib.parse for everything else
-    parsed = urlparse(f"//{value}")
-    host = parsed.hostname or DEFAULT_HOST
-    port = parsed.port or default_port
-
-    return host, port, False
-
-
 def resolve_frontend_tools(
-    vite_host: str | None, vite_port: int, all_ifaces: bool
+    vite_port: int, all_ifaces: bool
 ) -> tuple[list[str], list[str], str]:
     """Resolve frontend install and dev commands.
 
@@ -123,8 +84,6 @@ def resolve_frontend_tools(
 
     if all_ifaces:
         dev_cmd.append("--host")
-    elif vite_host and vite_host != "localhost":
-        dev_cmd.append(f"--host={vite_host}")
 
     if name == "bun":
         stderr.write(BUN_BUG)
@@ -168,21 +127,18 @@ async def _terminate_process(proc: asyncio.subprocess.Process, name: str) -> Non
 
 
 async def run_devserver(
-    vite_host: str | None,
     vite_port: int,
     all_ifaces: bool,
-    backend_host: str,
-    backend_port: int,
+    backend_ep: dict,
 ) -> None:
     """Run the development server with install, backend, and frontend."""
-    install_cmd, dev_cmd, tool_name = resolve_frontend_tools(
-        vite_host, vite_port, all_ifaces
-    )
+    install_cmd, dev_cmd, tool_name = resolve_frontend_tools(vite_port, all_ifaces)
+
+    backend_host = backend_ep["host"]
+    backend_port = backend_ep["port"]
 
     # Tell the backend where the Vite dev server is
-    os.environ["FASTAPI_VUE_FRONTEND_URL"] = (
-        f"http://{vite_host or 'localhost'}:{vite_port}"
-    )
+    os.environ["FASTAPI_VUE_FRONTEND_URL"] = f"http://localhost:{vite_port}"
     # Tell Vite where the backend is (for proxying /api requests)
     os.environ["FASTAPI_VUE_BACKEND_URL"] = f"http://{backend_host}:{backend_port}"
     cwd = str(Path(__file__).parent.parent)
@@ -292,15 +248,21 @@ def main():
     )
     args = parser.parse_args()
 
-    vite_host, vite_port, all_ifaces = parse_endpoint(args.frontend, DEFAULT_VITE_PORT)
-    backend_host, backend_port, _ = parse_endpoint(args.backend, DEFAULT_BACKEND_PORT)
-    # Backend host defaults to localhost (never None)
-    backend_host = backend_host or DEFAULT_HOST
+    # parse_endpoint returns list of dicts with host/port or uds keys
+    # Multiple entries means bind all interfaces (IPv4 + IPv6)
+    vite_endpoints = parse_endpoint(args.frontend, DEFAULT_VITE_PORT)
+    backend_endpoints = parse_endpoint(args.backend, DEFAULT_BACKEND_PORT)
+
+    # Vite doesn't support unix sockets
+    if "uds" in vite_endpoints[0]:
+        stderr.write("┃ ⚠️  Vite does not support unix sockets\n")
+        raise SystemExit(1)
+
+    vite_port = vite_endpoints[0]["port"]
+    all_ifaces = len(vite_endpoints) > 1
 
     with contextlib.suppress(KeyboardInterrupt):
-        asyncio.run(
-            run_devserver(vite_host, vite_port, all_ifaces, backend_host, backend_port)
-        )
+        asyncio.run(run_devserver(vite_port, all_ifaces, backend_endpoints[0]))
 
 
 if __name__ == "__main__":

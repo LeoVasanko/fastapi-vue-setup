@@ -15,11 +15,10 @@ import os
 import re
 import subprocess
 import sys
-import tomllib
 from pathlib import Path
 from textwrap import indent
 
-import tomli_w
+import tomlkit
 
 # Template directory
 TEMPLATE_DIR = Path(__file__).parent / "template"
@@ -126,8 +125,7 @@ def find_module_name(project_dir: Path) -> str | None:
     if not pyproject.exists():
         return None
 
-    with open(pyproject, "rb") as f:
-        data = tomllib.load(f)
+    data = tomlkit.parse(pyproject.read_text())
 
     if "project" in data and "name" in data["project"]:
         name = data["project"]["name"]
@@ -200,19 +198,15 @@ def patch_app_file(
         print(f"❌ Cannot patch {path} - file not found")
         return False
 
-    content = path.read_text()
+    original_content = path.read_text()
     marker = "from fastapi_vue import Frontend"
 
-    if marker in content:
-        print(f"⚠️  Skipping {path} (already patched)")
+    if marker in original_content:
+        print(f"✔️  {path} (already patched)")
         return False
 
-    if dry_run:
-        print(f"[DRY RUN] Would patch {path}")
-        return True
-
     # Find where to insert the import (after other imports)
-    lines = content.split("\n")
+    lines = original_content.split("\n")
     import_line = "from fastapi_vue import Frontend"
 
     route_line = f'frontend.route({app_var}, "/")'
@@ -229,6 +223,11 @@ def patch_app_file(
         elif stripped and not stripped.startswith("#") and last_import_idx > 0:
             # Stop at first non-import, non-comment, non-empty line after imports
             break
+
+    # Check if we found imports to insert after
+    if last_import_idx == 0 and not lines[0].strip().startswith(("import ", "from ")):
+        print(f"⚠️  Skipping {path} (no imports found to patch)")
+        return False
 
     # Insert imports after last import, then frontend instantiation
     if not has_pathlib:
@@ -268,6 +267,15 @@ def patch_app_file(
         content = content[:insert_pos] + load_code + content[insert_pos:]
         lifespan_patched = True
 
+    # Check if content actually changed
+    if content == original_content:
+        print(f"⚠️  Skipping {path} (no changes needed)")
+        return False
+
+    if dry_run:
+        print(f"[DRY RUN] Would patch {path}")
+        return True
+
     path.write_text(content)
     print(f"✅ Patched {path}")
 
@@ -303,21 +311,17 @@ def patch_vite_config(
         print(f"❌ Cannot patch {path} - file not found")
         return False
 
-    content = path.read_text()
+    original_content = path.read_text()
     marker = "vite-plugin-fastapi"
 
-    if marker in content:
-        print(f"⚠️  Skipping {path} (already patched)")
+    if marker in original_content:
+        print(f"✔️  {path} (already patched)")
         return False
-
-    if dry_run:
-        print(f"[DRY RUN] Would patch {path}")
-        return True
 
     # Add import for the plugin at the top (after other imports)
     import_line = f"import fastapiVue from './{marker}.js'"
 
-    lines = content.split("\n")
+    lines = original_content.split("\n")
     new_lines = []
     import_inserted = False
 
@@ -349,6 +353,18 @@ def patch_vite_config(
     if match:
         insert_pos = match.end()
         content = content[:insert_pos] + "\n    fastapiVue()," + content[insert_pos:]
+    else:
+        print(f"⚠️  Skipping {path} (no plugins array found)")
+        return False
+
+    # Check if content actually changed
+    if content == original_content:
+        print(f"⚠️  Skipping {path} (no changes needed)")
+        return False
+
+    if dry_run:
+        print(f"[DRY RUN] Would patch {path}")
+        return True
 
     path.write_text(content)
     print(f"✅ Patched {path}")
@@ -384,16 +400,14 @@ def patch_frontend_health_check(frontend_dir: Path, dry_run: bool = False) -> bo
         print("⚠️  No Vue file found to patch, skipping frontend health check")
         return False
 
-    content = target_file.read_text()
+    original_content = target_file.read_text()
 
     # Check if already patched
-    if "/api/health" in content:
-        print(f"⚠️  Skipping {target_file} (already patched)")
+    if "/api/health" in original_content:
+        print(f"✔️  {target_file} (already patched)")
         return False
 
-    if dry_run:
-        print(f"[DRY RUN] Would patch {target_file}")
-        return True
+    content = original_content
 
     # Detect if TypeScript (has lang="ts" in script tag)
     is_typescript = 'lang="ts"' in content
@@ -405,30 +419,52 @@ def patch_frontend_health_check(frontend_dir: Path, dry_run: bool = False) -> bo
 
     # Insert script addition before </script>
     script_end_match = re.search(r"</script>", content)
-    if script_end_match:
-        insert_pos = script_end_match.start()
-        content = content[:insert_pos] + script_addition + content[insert_pos:]
+    if not script_end_match:
+        print(f"⚠️  Skipping {target_file} (no </script> tag found)")
+        return False
+
+    insert_pos = script_end_match.start()
+    content = content[:insert_pos] + script_addition + content[insert_pos:]
 
     # Insert status inline - find the best place based on file type
     # For HelloWorld.vue: insert before </h3>
-    # For App.vue (minimal): insert before the last </p> in template
+    # For App.vue (minimal): only patch if it's the default "You did it!" template
     if "HelloWorld" in str(target_file):
         # Insert before closing </h3>
         h3_close = content.find("    </h3>")
         if h3_close == -1:
+            print(
+                f"⚠️  Skipping {target_file} (no </h3> tag found for status insertion)"
+            )
             return False
         before, after = content[:h3_close], content[h3_close:]
         content = f"{before}{indent(STATUS_SPAN_TEMPLATE, '  ')}{after}"
     else:
-        # Minimal App.vue - insert before the last </p> before </template>
+        # Minimal App.vue - only patch if it contains the default welcome message
+        if "<h1>You did it!</h1>" not in content:
+            print(f"⚠️  Skipping {target_file} (not a default Vue template)")
+            return False
+        # Insert before the </p> tag
         template_end = content.find("</template>")
-        if template_end != -1:
-            # Find last </p> before </template>
-            last_p = content.rfind("  </p>", 0, template_end)
-            if last_p == -1:
-                return False
-            before, after = content[:last_p], content[last_p:]
-            content = f"{before}{STATUS_SPAN_TEMPLATE}{after}"
+        if template_end == -1:
+            print(f"⚠️  Skipping {target_file} (no </template> tag found)")
+            return False
+        # Find </p> before </template>
+        last_p = content.rfind("</p>", 0, template_end)
+        if last_p == -1:
+            print(f"⚠️  Skipping {target_file} (no </p> tag found for status insertion)")
+            return False
+        before, after = content[:last_p], content[last_p:]
+        content = f"{before}{STATUS_SPAN_TEMPLATE}{after}"
+
+    # Check if content actually changed
+    if content == original_content:
+        print(f"⚠️  Skipping {target_file} (no changes needed)")
+        return False
+
+    if dry_run:
+        print(f"[DRY RUN] Would patch {target_file}")
+        return True
 
     target_file.write_text(content)
     print(f"✅ Patched {target_file}")
@@ -445,8 +481,15 @@ def write_file(
     """Write content to a file, handling existing files and dry-run."""
     exists = path.exists()
     if exists and not overwrite:
-        print(f"⚠️  Skipping {path} (exists)")
+        print(f"ℹ️  Skipping {path} (exists)")
         return False
+
+    # Check if content is the same
+    if exists:
+        existing_content = path.read_text()
+        if existing_content == content:
+            print(f"✔️  {path} (already up to date)")
+            return False
 
     if dry_run:
         action = "overwrite" if exists else "create"
@@ -462,47 +505,72 @@ def write_file(
     return True
 
 
-def merge_pyproject(data: dict, additions: dict, module_name: str) -> dict:
-    """Merge additions into pyproject.toml data."""
-    result = data.copy()
-
+def merge_pyproject(
+    data: tomlkit.TOMLDocument, additions: dict, module_name: str
+) -> tomlkit.TOMLDocument:
+    """Merge additions into pyproject.toml data, preserving comments and existing values."""
     # Ensure hatchling build system is configured
-    if "build-system" not in result:
-        result["build-system"] = {}
-    result["build-system"]["requires"] = ["hatchling"]
-    result["build-system"]["build-backend"] = "hatchling.build"
+    if "build-system" not in data:
+        data["build-system"] = tomlkit.table()
 
-    # Add dependencies
-    if "project" not in result:
-        result["project"] = {}
-    if "dependencies" not in result["project"]:
-        result["project"]["dependencies"] = []
+    # Add hatchling to requires if not present, preserving existing requires
+    if "requires" not in data["build-system"]:
+        data["build-system"]["requires"] = ["hatchling"]
+    else:
+        requires = list(data["build-system"]["requires"])
+        if not any(r.startswith("hatchling") for r in requires):
+            requires.insert(0, "hatchling")
+            data["build-system"]["requires"] = requires
+
+    if "build-backend" not in data["build-system"]:
+        data["build-system"]["build-backend"] = "hatchling.build"
+
+    # Ensure project table exists
+    if "project" not in data:
+        data["project"] = tomlkit.table()
 
     # Add hatch build config
-    if "tool" not in result:
-        result["tool"] = {}
-    if "hatch" not in result["tool"]:
-        result["tool"]["hatch"] = {}
-    if "build" not in result["tool"]["hatch"]:
-        result["tool"]["hatch"]["build"] = {}
+    if "tool" not in data:
+        data["tool"] = tomlkit.table()
+    if "hatch" not in data["tool"]:
+        data["tool"]["hatch"] = tomlkit.table()
+    if "build" not in data["tool"]["hatch"]:
+        data["tool"]["hatch"]["build"] = tomlkit.table()
 
-    hatch_build = additions["tool"]["hatch"]["build"]
-    result["tool"]["hatch"]["build"]["packages"] = [
-        p.replace("MODULE_NAME", module_name) for p in hatch_build["packages"]
-    ]
-    result["tool"]["hatch"]["build"]["artifacts"] = [
-        a.replace("MODULE_NAME", module_name) for a in hatch_build["artifacts"]
-    ]
-    result["tool"]["hatch"]["build"]["only-packages"] = hatch_build["only-packages"]
+    hatch_build = data["tool"]["hatch"]["build"]
+    hatch_additions = additions["tool"]["hatch"]["build"]
 
-    if "targets" not in result["tool"]["hatch"]["build"]:
-        result["tool"]["hatch"]["build"]["targets"] = {}
+    # Set packages if not already set
+    if "packages" not in hatch_build:
+        hatch_build["packages"] = [
+            p.replace("MODULE_NAME", module_name) for p in hatch_additions["packages"]
+        ]
 
-    result["tool"]["hatch"]["build"]["targets"]["sdist"] = hatch_build["targets"][
-        "sdist"
-    ]
+    # Set artifacts if not already set
+    if "artifacts" not in hatch_build:
+        hatch_build["artifacts"] = [
+            a.replace("MODULE_NAME", module_name) for a in hatch_additions["artifacts"]
+        ]
 
-    return result
+    # Set only-packages if not already set
+    if "only-packages" not in hatch_build:
+        hatch_build["only-packages"] = hatch_additions["only-packages"]
+
+    # Add sdist target with custom hook
+    if "targets" not in hatch_build:
+        hatch_build["targets"] = tomlkit.table()
+    if "sdist" not in hatch_build["targets"]:
+        hatch_build["targets"]["sdist"] = tomlkit.table()
+    if "hooks" not in hatch_build["targets"]["sdist"]:
+        hatch_build["targets"]["sdist"]["hooks"] = tomlkit.table()
+    if "custom" not in hatch_build["targets"]["sdist"]["hooks"]:
+        hatch_build["targets"]["sdist"]["hooks"]["custom"] = tomlkit.table()
+    if "path" not in hatch_build["targets"]["sdist"]["hooks"]["custom"]:
+        hatch_build["targets"]["sdist"]["hooks"]["custom"]["path"] = hatch_additions[
+            "targets"
+        ]["sdist"]["hooks"]["custom"]["path"]
+
+    return data
 
 
 # =============================================================================
@@ -742,10 +810,28 @@ def cmd_setup(args: argparse.Namespace) -> int:
 
     # === Handle __main__.py ===
     main_file = module_dir / "__main__.py"
+    alt_main_file = module_dir / "__main__.fastapi-vue.py"
+    template = load_template("backend/__main__.py")
+    main_content = render_template(template, **tpl_vars)
+    used_alt_main = False
+
     if not main_file.exists():
-        template = load_template("backend/__main__.py")
-        content = render_template(template, **tpl_vars)
-        write_file(main_file, content, overwrite=False, dry_run=dry_run)
+        # No __main__.py, create it
+        write_file(main_file, main_content, overwrite=False, dry_run=dry_run)
+    else:
+        # Check if existing __main__.py is ours or compatible
+        existing_content = main_file.read_text()
+        if "fastapi_vue" in existing_content or existing_content == main_content:
+            # Already ours or matches - skip or update
+            if existing_content != main_content:
+                write_file(main_file, main_content, overwrite=True, dry_run=dry_run)
+            else:
+                print(f"✔️  {main_file} (already up to date)")
+        else:
+            # User has their own __main__.py, install as alternate filename
+            print(f"⚠️  {main_file} exists and is not ours, using alternate name")
+            write_file(alt_main_file, main_content, overwrite=True, dry_run=dry_run)
+            used_alt_main = True
 
     # === Update vite.config.js/ts ===
     frontend_dir = project_dir / "frontend"
@@ -774,39 +860,52 @@ def cmd_setup(args: argparse.Namespace) -> int:
     # === Update pyproject.toml ===
     pyproject_path = project_dir / "pyproject.toml"
     if pyproject_path.exists():
-        with open(pyproject_path, "rb") as f:
-            data = tomllib.load(f)
+        old_content = pyproject_path.read_text()
+        data = tomlkit.parse(old_content)
 
         updated = merge_pyproject(data, PYPROJECT_ADDITIONS, module_name)
 
-        # Add script entry pointing to the app we found/created
-        if "scripts" not in updated["project"]:
-            updated["project"]["scripts"] = {}
-        script_name = module_name.replace("_", "-")
-        updated["project"]["scripts"][script_name] = f"{module_name}.__main__:main"
+        # Only add script entry if project doesn't already have scripts
+        if "scripts" not in updated["project"] or not updated["project"]["scripts"]:
+            updated["project"]["scripts"] = tomlkit.table()
+            script_name = module_name.replace("_", "-")
+            if used_alt_main:
+                # Use the alternate module name with dot notation
+                main_module = "__main__.fastapi-vue"
+                updated["project"]["scripts"][script_name] = (
+                    f"{module_name}.{main_module}:main"
+                )
+            else:
+                updated["project"]["scripts"][script_name] = (
+                    f"{module_name}.__main__:main"
+                )
 
-        if dry_run:
+        # Check if content actually changed
+        new_content = tomlkit.dumps(updated)
+
+        if new_content == old_content:
+            print(f"✔️  {pyproject_path} (already up to date)")
+        elif dry_run:
             print(f"[DRY RUN] Would update {pyproject_path}")
         else:
-            with open(pyproject_path, "wb") as f:
-                tomli_w.dump(updated, f)
+            pyproject_path.write_text(new_content)
             print(f"✅ Updated {pyproject_path}")
 
     # === Add dependencies using uv ===
     if dry_run:
-        print("[DRY RUN] Would run: uv add 'fastapi[standard]' fastapi-vue")
-        print("[DRY RUN] Would run: uv add --group dev httpx")
+        print("[DRY RUN] Would run: uv add -U 'fastapi[standard]' fastapi-vue")
+        print("[DRY RUN] Would run: uv add -U --group dev httpx")
     else:
         print("📦 Adding dependencies...")
         result = subprocess.run(
-            ["uv", "add", "fastapi[standard]", "fastapi-vue"],
+            ["uv", "add", "-U", "fastapi[standard]", "fastapi-vue"],
             cwd=project_dir,
             check=False,
         )
         if result.returncode != 0:
             print("⚠️  Failed to add main dependencies")
         result = subprocess.run(
-            ["uv", "add", "--group", "dev", "httpx"],
+            ["uv", "add", "-U", "--group", "dev", "httpx"],
             cwd=project_dir,
             check=False,
         )
