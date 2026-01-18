@@ -9,7 +9,7 @@ description = "Tool to create or patch FastAPI+Vue projects with integrated buil
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "tomli-w>=1.0.0",
+    "tomlkit>=0.12.0",
 ]
 
 [project.urls]
