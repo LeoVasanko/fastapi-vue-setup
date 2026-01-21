@@ -1,4 +1,5 @@
 #!/usr/bin/env -S uv run
+# auto-upgrade@fastapi-vue-setup - remove this if you modify this file
 """Run Vite development server for frontend and FastAPI backend with auto-reload.
 
 Usage:
@@ -91,13 +92,15 @@ def resolve_frontend_tools(
     return install_cmd, dev_cmd, name
 
 
-async def wait_for_backend(backend_host: str, backend_port: int):
+async def wait_for_backend(host: str, port: int):
     """Wait for the backend to be ready by polling the health endpoint."""
     max_attempts = 50
+    url = f"http://{host}:{port}"
+
     async with httpx.AsyncClient() as client:
         for attempt in range(max_attempts):
             try:
-                await client.get(f"http://{backend_host}:{backend_port}", timeout=1.0)
+                await client.get(url, timeout=1.0)
                 stderr.write("✓ Backend ready!\n")
                 return True
             except httpx.RequestError:
@@ -129,18 +132,27 @@ async def _terminate_process(proc: asyncio.subprocess.Process, name: str) -> Non
 async def run_devserver(
     vite_port: int,
     all_ifaces: bool,
-    backend_ep: dict,
+    backend_host: str,
+    backend_port: int,
 ) -> None:
     """Run the development server with install, backend, and frontend."""
     install_cmd, dev_cmd, tool_name = resolve_frontend_tools(vite_port, all_ifaces)
-
-    backend_host = backend_ep["host"]
-    backend_port = backend_ep["port"]
 
     # Tell the backend where the Vite dev server is
     os.environ["FASTAPI_VUE_FRONTEND_URL"] = f"http://localhost:{vite_port}"
     # Tell Vite where the backend is (for proxying /api requests)
     os.environ["FASTAPI_VUE_BACKEND_URL"] = f"http://{backend_host}:{backend_port}"
+
+    backend_cmd = [
+        "uvicorn",
+        "MODULE_NAME.app:app",
+        "--host",
+        backend_host,
+        "--port",
+        str(backend_port),
+        "--reload",
+    ]
+
     cwd = str(Path(__file__).parent.parent)
     frontend_cwd = str(FRONTEND_PATH)
 
@@ -158,15 +170,6 @@ async def run_devserver(
         await asyncio.sleep(0.1)
 
         # Start backend (concurrent with install)
-        backend_cmd = [
-            "uvicorn",
-            "MODULE_NAME.app:app",
-            "--host",
-            backend_host,
-            "--port",
-            str(backend_port),
-            "--reload",
-        ]
         stderr.write(f">>> {' '.join(backend_cmd)}\n")
         backend_proc = await asyncio.create_subprocess_exec(*backend_cmd, cwd=cwd)
 
@@ -255,14 +258,19 @@ def main():
 
     # Vite doesn't support unix sockets
     if "uds" in vite_endpoints[0]:
-        stderr.write("┃ ⚠️  Vite does not support unix sockets\n")
+        stderr.write("┃ ⚠️  Unix sockets not supported for frontend\n")
+        raise SystemExit(1)
+    if "uds" in backend_endpoints[0]:
+        stderr.write("┃ ⚠️  Unix sockets not supported for backend\n")
         raise SystemExit(1)
 
     vite_port = vite_endpoints[0]["port"]
     all_ifaces = len(vite_endpoints) > 1
+    backend_host = backend_endpoints[0]["host"]
+    backend_port = backend_endpoints[0]["port"]
 
     with contextlib.suppress(KeyboardInterrupt):
-        asyncio.run(run_devserver(vite_port, all_ifaces, backend_endpoints[0]))
+        asyncio.run(run_devserver(vite_port, all_ifaces, backend_host, backend_port))
 
 
 if __name__ == "__main__":
