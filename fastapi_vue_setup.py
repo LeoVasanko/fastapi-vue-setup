@@ -23,6 +23,10 @@ import tomlkit
 # Template directory
 TEMPLATE_DIR = Path(__file__).parent / "template"
 
+# Marker comment indicating file can be auto-upgraded
+# Users should remove this line to prevent automatic updates
+UPGRADE_MARKER = "auto-upgrade@fastapi-vue-setup"
+
 # pyproject.toml additions for patched projects
 PYPROJECT_ADDITIONS = {
     "tool": {
@@ -471,14 +475,23 @@ def patch_frontend_health_check(frontend_dir: Path, dry_run: bool = False) -> bo
     return True
 
 
+# Track .new.py files written during setup (for merge notification)
+_new_files_written: list[tuple[Path, Path]] = []
+
+
 def write_file(
     path: Path,
     content: str,
     overwrite: bool = True,
     dry_run: bool = False,
     executable: bool = False,
+    fallback_path: Path | None = None,
 ) -> bool:
-    """Write content to a file, handling existing files and dry-run."""
+    """Write content to a file, handling existing files and dry-run.
+
+    If fallback_path is provided and the file exists without the upgrade marker,
+    the content will be written to fallback_path instead of being skipped.
+    """
     exists = path.exists()
     if exists and not overwrite:
         print(f"ℹ️  Skipping {path} (exists)")
@@ -489,6 +502,16 @@ def write_file(
         existing_content = path.read_text()
         if existing_content == content:
             print(f"✔️  {path} (already up to date)")
+            return False
+
+        # If overwrite requested but file doesn't have upgrade marker
+        if overwrite and UPGRADE_MARKER not in existing_content:
+            if fallback_path is not None:
+                # Write to fallback path instead
+                return _write_fallback_file(
+                    path, fallback_path, content, dry_run, executable
+                )
+            print(f"ℹ️  Skipping {path} (customized by user)")
             return False
 
     if dry_run:
@@ -502,6 +525,34 @@ def write_file(
         path.chmod(path.stat().st_mode | 0o111)
     action = "Updated" if exists else "Created"
     print(f"✅ {action} {path}")
+    return True
+
+
+def _write_fallback_file(
+    original_path: Path,
+    fallback_path: Path,
+    content: str,
+    dry_run: bool,
+    executable: bool,
+) -> bool:
+    """Write content to a fallback .new.py file when original can't be overwritten."""
+    # Check if fallback already has same content
+    if fallback_path.exists():
+        if fallback_path.read_text() == content:
+            print(f"✔️  {fallback_path} (already up to date)")
+            return False
+
+    if dry_run:
+        print(f"[DRY RUN] Would create {fallback_path} (original customized by user)")
+        _new_files_written.append((fallback_path, original_path))
+        return True
+
+    fallback_path.parent.mkdir(parents=True, exist_ok=True)
+    fallback_path.write_text(content)
+    if executable and sys.platform != "win32":
+        fallback_path.chmod(fallback_path.stat().st_mode | 0o111)
+    print(f"✅ Created {fallback_path} (original customized by user)")
+    _new_files_written.append((fallback_path, original_path))
     return True
 
 
@@ -768,26 +819,39 @@ def cmd_setup(args: argparse.Namespace) -> int:
             module_dir.mkdir(parents=True)
 
     # === Install scripts (always update our own scripts) ===
-    script_files = [
+    # util.py and build-frontend.py are internal and always overwritten
+    # devserver.py can be customized, so use fallback if needed
+    internal_script_files = [
         (fastapi_vue_scripts / "util.py", "scripts/fastapi-vue/util.py"),
         (
             fastapi_vue_scripts / "build-frontend.py",
             "scripts/fastapi-vue/build-frontend.py",
         ),
-        (scripts_dir / "devserver.py", "scripts/devserver.py"),
     ]
 
-    for dest_path, template_path in script_files:
+    for dest_path, template_path in internal_script_files:
         template = load_template(template_path)
         content = render_template(template, **tpl_vars)
-        is_executable = dest_path.name == "devserver.py"
         write_file(
             dest_path,
             content,
             overwrite=True,
             dry_run=dry_run,
-            executable=is_executable,
         )
+
+    # devserver.py - use fallback if customized by user
+    devserver_path = scripts_dir / "devserver.py"
+    devserver_fallback = scripts_dir / "devserver.new.py"
+    template = load_template("scripts/devserver.py")
+    content = render_template(template, **tpl_vars)
+    write_file(
+        devserver_path,
+        content,
+        overwrite=True,
+        dry_run=dry_run,
+        executable=True,
+        fallback_path=devserver_fallback,
+    )
 
     # === Handle app module ===
     if app_file:
@@ -810,28 +874,21 @@ def cmd_setup(args: argparse.Namespace) -> int:
 
     # === Handle __main__.py ===
     main_file = module_dir / "__main__.py"
-    alt_main_file = module_dir / "__main__.fastapi-vue.py"
+    main_fallback = module_dir / "__main__.new.py"
     template = load_template("backend/__main__.py")
     main_content = render_template(template, **tpl_vars)
-    used_alt_main = False
 
-    if not main_file.exists():
-        # No __main__.py, create it
-        write_file(main_file, main_content, overwrite=False, dry_run=dry_run)
-    else:
-        # Check if existing __main__.py is ours or compatible
-        existing_content = main_file.read_text()
-        if "fastapi_vue" in existing_content or existing_content == main_content:
-            # Already ours or matches - skip or update
-            if existing_content != main_content:
-                write_file(main_file, main_content, overwrite=True, dry_run=dry_run)
-            else:
-                print(f"✔️  {main_file} (already up to date)")
-        else:
-            # User has their own __main__.py, install as alternate filename
-            print(f"⚠️  {main_file} exists and is not ours, using alternate name")
-            write_file(alt_main_file, main_content, overwrite=True, dry_run=dry_run)
-            used_alt_main = True
+    # Use write_file with fallback - it handles all cases:
+    # - File doesn't exist: create it
+    # - File exists with marker: update it
+    # - File exists without marker: write to fallback
+    write_file(
+        main_file,
+        main_content,
+        overwrite=True,
+        dry_run=dry_run,
+        fallback_path=main_fallback,
+    )
 
     # === Update vite.config.js/ts ===
     frontend_dir = project_dir / "frontend"
@@ -869,16 +926,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         if "scripts" not in updated["project"] or not updated["project"]["scripts"]:
             updated["project"]["scripts"] = tomlkit.table()
             script_name = module_name.replace("_", "-")
-            if used_alt_main:
-                # Use the alternate module name with dot notation
-                main_module = "__main__.fastapi-vue"
-                updated["project"]["scripts"][script_name] = (
-                    f"{module_name}.{main_module}:main"
-                )
-            else:
-                updated["project"]["scripts"][script_name] = (
-                    f"{module_name}.__main__:main"
-                )
+            updated["project"]["scripts"][script_name] = f"{module_name}.__main__:main"
 
         # Check if content actually changed
         new_content = tomlkit.dumps(updated)
@@ -945,6 +993,19 @@ def cmd_setup(args: argparse.Namespace) -> int:
         "SCRIPT_NAME", script_name
     )
     print(message)
+
+    # Show merge note if any .new.py files were written
+    if _new_files_written:
+        print()
+        print(
+            "⚠️  Note: Some files could not be auto-upgraded because you customized them."
+        )
+        print("   Please manually merge the following files:")
+        for new_file, original_file in _new_files_written:
+            print(f"     • {new_file.name} → {original_file.name}")
+        print()
+        # Clear the list for potential subsequent runs
+        _new_files_written.clear()
 
     return 0
 

@@ -1,3 +1,4 @@
+# auto-upgrade@fastapi-vue-setup - remove this if you modify this file
 import argparse
 import asyncio
 import os
