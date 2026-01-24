@@ -393,28 +393,16 @@ def patch_app_file(
     lines.append(route_line)
     content = "\n".join(lines)
 
-    # Try to patch lifespan function
+    # Try to patch lifespan function - insert await frontend.load() before yield
     lifespan_patched = False
 
-    # Look for async def lifespan pattern and insert after the opening (and docstring if present)
-    lifespan_pattern = r"(async\s+def\s+lifespan\s*\([^)]*\)\s*(?:->.*?)?:\s*\n)"
-    match = re.search(lifespan_pattern, content)
-    if match:
-        insert_pos = match.end()
-        rest = content[insert_pos:]
-
-        # Detect indentation from the next line
-        indent_match = re.match(r"([ \t]*)", rest)
-        indent = (
-            indent_match.group(1) if indent_match and indent_match.group(1) else "    "
-        )
-
-        # Check if there's a docstring and skip past it
-        docstring_pattern = r'^([ \t]*)("""[\s\S]*?"""|\'\'\'\'[\s\S]*?\'\'\')\s*\n'
-        docstring_match = re.match(docstring_pattern, rest)
-        if docstring_match:
-            insert_pos += docstring_match.end()
-
+    # Look for yield inside an async def lifespan function
+    # Find the yield statement and insert before it
+    yield_pattern = r"^([ \t]+)(yield\b)"
+    yield_match = re.search(yield_pattern, content, re.MULTILINE)
+    if yield_match:
+        indent = yield_match.group(1)
+        insert_pos = yield_match.start()
         load_code = f"{indent}await frontend.load()\n"
         content = content[:insert_pos] + load_code + content[insert_pos:]
         lifespan_patched = True
@@ -727,6 +715,19 @@ def merge_pyproject(
     # Ensure project table exists
     if "project" not in data:
         data["project"] = tomlkit.table()
+
+    # Ensure Python version is at least 3.11 (required by fastapi-vue)
+    if "requires-python" in data["project"]:
+        req = data["project"]["requires-python"]
+        # Parse minimum version from strings like ">=3.10" or ">=3.9,<4"
+        import re
+        match = re.search(r">=\s*(\d+)\.(\d+)", req)
+        if match:
+            major, minor = int(match.group(1)), int(match.group(2))
+            if major < 3 or (major == 3 and minor < 11):
+                data["project"]["requires-python"] = ">=3.11"
+    else:
+        data["project"]["requires-python"] = ">=3.11"
 
     # Add hatch build config
     if "tool" not in data:
