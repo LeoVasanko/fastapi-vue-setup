@@ -138,10 +138,18 @@ def find_module_name(project_dir: Path) -> str | None:
     return None
 
 
-def find_fastapi_app(module_dir: Path) -> tuple[Path, str] | None:
+def find_fastapi_app(
+    module_dir: Path, project_dir: Path | None = None
+) -> tuple[Path, str] | None:
     """Find the FastAPI app in a module directory.
 
     Returns (file_path, app_variable_name) or None if not found.
+
+    Search order:
+    1. Common app files in module_dir (app.py, main.py, etc.)
+    2. All .py files in module_dir
+    3. Subpackage indicated by CLI entrypoint in pyproject.toml
+    4. Follow re-exports in __init__.py files
     """
     # Common app file names to check first
     candidates = ["app.py", "main.py", "server.py", "api.py", "__init__.py"]
@@ -154,12 +162,152 @@ def find_fastapi_app(module_dir: Path) -> tuple[Path, str] | None:
             if result:
                 return path, result
 
-    # Then check all .py files
+    # Then check all .py files in module_dir
     for path in module_dir.glob("*.py"):
         if path.name not in candidates:
             result = _find_app_in_file(path)
             if result:
                 return path, result
+
+    # Try to find app via CLI entrypoint in pyproject.toml
+    if project_dir:
+        result = _find_app_via_entrypoint(module_dir, project_dir)
+        if result:
+            return result
+
+    return None
+
+
+def _find_app_via_entrypoint(module_dir: Path, project_dir: Path) -> tuple[Path, str] | None:
+    """Find FastAPI app by following the CLI entrypoint in pyproject.toml.
+
+    If pyproject.toml has a script like `myapp = "myapp.subpkg.__main__:main"`,
+    look in myapp/subpkg/ for the app (checking __init__.py exports and common files).
+    """
+    pyproject = project_dir / "pyproject.toml"
+    if not pyproject.exists():
+        return None
+
+    try:
+        data = tomlkit.parse(pyproject.read_text())
+    except Exception:
+        return None
+
+    scripts = data.get("project", {}).get("scripts", {})
+    if not scripts:
+        return None
+
+    module_name = module_dir.name
+
+    # Find script entries that reference this module
+    for script_name, entry in scripts.items():
+        if not isinstance(entry, str):
+            continue
+        # Parse entry like "module.subpkg.__main__:main"
+        if ":" not in entry:
+            continue
+        module_path, _ = entry.rsplit(":", 1)
+        parts = module_path.split(".")
+
+        # Check if this entry starts with our module
+        if not parts or parts[0] != module_name:
+            continue
+
+        # If there's a subpackage (e.g., module.fastapi.__main__), check there
+        if len(parts) >= 2:
+            # Build path to subpackage (exclude __main__ or similar)
+            subpkg_parts = [p for p in parts[1:] if not p.startswith("_")]
+            if subpkg_parts:
+                subpkg_dir = module_dir / "/".join(subpkg_parts)
+                if subpkg_dir.is_dir():
+                    result = _find_app_in_subpackage(subpkg_dir)
+                    if result:
+                        return result
+
+    return None
+
+
+def _find_app_in_subpackage(subpkg_dir: Path) -> tuple[Path, str] | None:
+    """Find FastAPI app in a subpackage, following __init__.py exports."""
+    # First check __init__.py for re-exports like `from .mainapp import app`
+    init_file = subpkg_dir / "__init__.py"
+    if init_file.exists():
+        result = _follow_init_reexport(init_file, subpkg_dir)
+        if result:
+            return result
+
+    # Check common app file names in subpackage
+    for name in ["app.py", "main.py", "mainapp.py", "server.py", "api.py"]:
+        path = subpkg_dir / name
+        if path.exists():
+            result = _find_app_in_file(path)
+            if result:
+                return path, result
+
+    return None
+
+
+def _find_existing_cli_entrypoint(project_dir: Path, module_name: str) -> str | None:
+    """Check if pyproject.toml already has a CLI entrypoint for this module.
+
+    Returns the entrypoint string if found, None otherwise.
+    """
+    pyproject = project_dir / "pyproject.toml"
+    if not pyproject.exists():
+        return None
+
+    try:
+        data = tomlkit.parse(pyproject.read_text())
+    except Exception:
+        return None
+
+    scripts = data.get("project", {}).get("scripts", {})
+    if not scripts:
+        return None
+
+    # Look for any script that references our module
+    for script_name, entry in scripts.items():
+        if isinstance(entry, str) and entry.startswith(f"{module_name}."):
+            return f"{script_name} = \"{entry}\""
+
+    return None
+
+
+def _follow_init_reexport(init_file: Path, subpkg_dir: Path) -> tuple[Path, str] | None:
+    """Follow a re-export in __init__.py to find the actual app file.
+
+    Looks for patterns like:
+    - from .mainapp import app
+    - from module.subpkg.mainapp import app
+    """
+    try:
+        content = init_file.read_text()
+    except Exception:
+        return None
+
+    # Look for: from .module import app (or similar variable names)
+    # Pattern matches: from .mainapp import app, application, etc.
+    pattern = r"from\s+\.(\w+)\s+import\s+(\w+)"
+    for match in re.finditer(pattern, content):
+        module_name, var_name = match.groups()
+        if var_name.lower() in ("app", "application", "api"):
+            target_file = subpkg_dir / f"{module_name}.py"
+            if target_file.exists():
+                # Verify the app is actually there
+                app_var = _find_app_in_file(target_file)
+                if app_var:
+                    return target_file, app_var
+
+    # Also check for absolute imports: from pkg.subpkg.module import app
+    abs_pattern = r"from\s+[\w.]+\.(\w+)\s+import\s+(\w+)"
+    for match in re.finditer(abs_pattern, content):
+        module_name, var_name = match.groups()
+        if var_name.lower() in ("app", "application", "api"):
+            target_file = subpkg_dir / f"{module_name}.py"
+            if target_file.exists():
+                app_var = _find_app_in_file(target_file)
+                if app_var:
+                    return target_file, app_var
 
     return None
 
@@ -798,7 +946,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
     fastapi_vue_scripts = scripts_dir / "fastapi-vue"
 
     # Find existing FastAPI app
-    app_info = find_fastapi_app(module_dir) if module_dir.exists() else None
+    app_info = find_fastapi_app(module_dir, project_dir) if module_dir.exists() else None
 
     if app_info:
         app_file, app_var = app_info
@@ -873,22 +1021,27 @@ def cmd_setup(args: argparse.Namespace) -> int:
         write_file(app_file_path, content, overwrite=False, dry_run=dry_run)
 
     # === Handle __main__.py ===
-    main_file = module_dir / "__main__.py"
-    main_fallback = module_dir / "__main__.new.py"
-    template = load_template("backend/__main__.py")
-    main_content = render_template(template, **tpl_vars)
+    # Skip if project already has a CLI entrypoint in pyproject.toml
+    existing_cli = _find_existing_cli_entrypoint(project_dir, module_name)
+    if existing_cli:
+        print(f"ℹ️  Using existing CLI entrypoint: {existing_cli}")
+    else:
+        main_file = module_dir / "__main__.py"
+        main_fallback = module_dir / "__main__.new.py"
+        template = load_template("backend/__main__.py")
+        main_content = render_template(template, **tpl_vars)
 
-    # Use write_file with fallback - it handles all cases:
-    # - File doesn't exist: create it
-    # - File exists with marker: update it
-    # - File exists without marker: write to fallback
-    write_file(
-        main_file,
-        main_content,
-        overwrite=True,
-        dry_run=dry_run,
-        fallback_path=main_fallback,
-    )
+        # Use write_file with fallback - it handles all cases:
+        # - File doesn't exist: create it
+        # - File exists with marker: update it
+        # - File exists without marker: write to fallback
+        write_file(
+            main_file,
+            main_content,
+                overwrite=True,
+            dry_run=dry_run,
+            fallback_path=main_fallback,
+        )
 
     # === Update vite.config.js/ts ===
     frontend_dir = project_dir / "frontend"
@@ -962,18 +1115,18 @@ def cmd_setup(args: argparse.Namespace) -> int:
 
     # === Update .gitignore ===
     gitignore_path = project_dir / ".gitignore"
-    gitignore_entry = f"{module_name}/frontend-build/"
+    gitignore_entry = f"/{module_name}/frontend-build"
     if gitignore_path.exists():
-        gitignore_content = gitignore_path.read_text()
-        if gitignore_entry not in gitignore_content:
-            if dry_run:
-                print(f"[DRY RUN] Would add {gitignore_entry} to .gitignore")
-            else:
-                with open(gitignore_path, "a") as f:
-                    if not gitignore_content.endswith("\n"):
-                        f.write("\n")
-                    f.write(f"{gitignore_entry}\n")
-                print(f"✅ Added {gitignore_entry} to .gitignore")
+        gitignore_content = gitignore_path.read_bytes()
+        if b"frontend-build" in gitignore_content:
+            print("✔️  .gitignore (frontend-build already ignored)")
+        elif dry_run:
+            print(f"[DRY RUN] Would add {gitignore_entry} to .gitignore")
+        else:
+            nl = b"\r\n" if b"\r\n" in gitignore_content else b"\n"
+            suffix = b"" if gitignore_content.endswith(nl) else nl
+            gitignore_path.write_bytes(gitignore_content + suffix + gitignore_entry.encode() + nl)
+            print(f"✅ Added {gitignore_entry} to .gitignore")
     elif dry_run:
         print(f"[DRY RUN] Would create .gitignore with {gitignore_entry}")
     else:
