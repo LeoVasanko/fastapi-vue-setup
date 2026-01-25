@@ -51,9 +51,7 @@ PYPROJECT_ADDITIONS = {
 # Frontend instantiation block for patching existing apps
 FRONTEND_BLOCK = """
 # Vue Frontend static files
-frontend = Frontend(
-    Path(__file__).with_name("frontend-build"), spa=True, cached=["/assets/"]
-)
+frontend = Frontend(Path(__file__).with_name("frontend-build"), cached=["/assets/"])
 """
 
 # TypeScript health check script for Vue components
@@ -390,6 +388,7 @@ def patch_app_file(
 
     # Append route at end
     lines.append("")
+    lines.append("# Serve the Vue frontend (needs to be last if SPA catch-all is used)")
     lines.append(route_line)
     content = "\n".join(lines)
 
