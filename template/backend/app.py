@@ -5,9 +5,7 @@ from fastapi import FastAPI
 from fastapi_vue import Frontend
 
 # Vue Frontend static files
-frontend = Frontend(
-    Path(__file__).with_name("frontend-build"), spa=True, cached=["/assets/"]
-)
+frontend = Frontend(Path(__file__).with_name("frontend-build"), cached=["/assets/"])
 
 
 @asynccontextmanager
@@ -29,5 +27,5 @@ async def health_check():
     return {"status": "ok"}
 
 
-# Final catch-all route for frontend files (keep at end of file)
+# Serve the Vue frontend (needs to be last if SPA catch-all is used)
 frontend.route(app, "/")
