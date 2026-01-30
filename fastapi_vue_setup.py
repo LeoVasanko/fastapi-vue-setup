@@ -13,6 +13,7 @@ Options:
 import argparse
 import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -176,7 +177,9 @@ def find_fastapi_app(
     return None
 
 
-def _find_app_via_entrypoint(module_dir: Path, project_dir: Path) -> tuple[Path, str] | None:
+def _find_app_via_entrypoint(
+    module_dir: Path, project_dir: Path
+) -> tuple[Path, str] | None:
     """Find FastAPI app by following the CLI entrypoint in pyproject.toml.
 
     If pyproject.toml has a script like `myapp = "myapp.subpkg.__main__:main"`,
@@ -266,7 +269,7 @@ def _find_existing_cli_entrypoint(project_dir: Path, module_name: str) -> str | 
     # Look for any script that references our module
     for script_name, entry in scripts.items():
         if isinstance(entry, str) and entry.startswith(f"{module_name}."):
-            return f"{script_name} = \"{entry}\""
+            return f'{script_name} = "{entry}"'
 
     return None
 
@@ -621,11 +624,14 @@ def write_file(
     dry_run: bool = False,
     executable: bool = False,
     fallback_path: Path | None = None,
+    force: bool = False,
 ) -> bool:
     """Write content to a file, handling existing files and dry-run.
 
     If fallback_path is provided and the file exists without the upgrade marker,
     the content will be written to fallback_path instead of being skipped.
+
+    If force=True, always overwrite without checking for upgrade marker.
     """
     exists = path.exists()
     if exists and not overwrite:
@@ -639,8 +645,8 @@ def write_file(
             print(f"✔️  {path} (already up to date)")
             return False
 
-        # If overwrite requested but file doesn't have upgrade marker
-        if overwrite and UPGRADE_MARKER not in existing_content:
+        # If overwrite requested but file doesn't have upgrade marker (unless force)
+        if overwrite and not force and UPGRADE_MARKER not in existing_content:
             if fallback_path is not None:
                 # Write to fallback path instead
                 return _write_fallback_file(
@@ -720,6 +726,7 @@ def merge_pyproject(
         req = data["project"]["requires-python"]
         # Parse minimum version from strings like ">=3.10" or ">=3.9,<4"
         import re
+
         match = re.search(r">=\s*(\d+)\.(\d+)", req)
         if match:
             major, minor = int(match.group(1)), int(match.group(2))
@@ -783,8 +790,6 @@ def find_js_runtime() -> tuple[str, str] | None:
     Returns (tool_path, tool_name) where tool_name is "deno", "npm", or "bun".
     Returns None if no runtime is found.
     """
-    import shutil
-
     options = ["deno", "npm", "bun"]
 
     # Check for JS_RUNTIME environment variable
@@ -946,7 +951,9 @@ def cmd_setup(args: argparse.Namespace) -> int:
     fastapi_vue_scripts = scripts_dir / "fastapi-vue"
 
     # Find existing FastAPI app
-    app_info = find_fastapi_app(module_dir, project_dir) if module_dir.exists() else None
+    app_info = (
+        find_fastapi_app(module_dir, project_dir) if module_dir.exists() else None
+    )
 
     if app_info:
         app_file, app_var = app_info
@@ -962,30 +969,37 @@ def cmd_setup(args: argparse.Namespace) -> int:
 
     # Create directories
     if not dry_run:
-        fastapi_vue_scripts.mkdir(parents=True, exist_ok=True)
         if not module_dir.exists():
             module_dir.mkdir(parents=True)
+        fastapi_vue_scripts.mkdir(parents=True, exist_ok=True)
 
     # === Install scripts (always update our own scripts) ===
-    # util.py and build-frontend.py are internal and always overwritten
+    # Scripts in fastapi-vue folder are internal and always overwritten
     # devserver.py can be customized, so use fallback if needed
-    internal_script_files = [
-        (fastapi_vue_scripts / "util.py", "scripts/fastapi-vue/util.py"),
-        (
-            fastapi_vue_scripts / "build-frontend.py",
-            "scripts/fastapi-vue/build-frontend.py",
-        ),
-    ]
 
-    for dest_path, template_path in internal_script_files:
-        template = load_template(template_path)
-        content = render_template(template, **tpl_vars)
-        write_file(
-            dest_path,
-            content,
-            overwrite=True,
-            dry_run=dry_run,
-        )
+    # Remove obsolete util.py if present
+    obsolete_util = fastapi_vue_scripts / "util.py"
+    if obsolete_util.exists():
+        if dry_run:
+            print(f"[DRY RUN] Would remove obsolete {obsolete_util}")
+        else:
+            obsolete_util.unlink()
+            print(f"🗑️  Removed obsolete {obsolete_util}")
+
+    # Copy all files from the template's fastapi-vue folder
+    template_fastapi_vue_dir = TEMPLATE_DIR / "scripts" / "fastapi-vue"
+    for template_file in template_fastapi_vue_dir.iterdir():
+        if template_file.is_file():
+            dest_path = fastapi_vue_scripts / template_file.name
+            template = template_file.read_text()
+            content = render_template(template, **tpl_vars)
+            write_file(
+                dest_path,
+                content,
+                overwrite=True,
+                dry_run=dry_run,
+                force=True,  # Internal files, always overwrite
+            )
 
     # devserver.py - use fallback if customized by user
     devserver_path = scripts_dir / "devserver.py"
@@ -1021,27 +1035,32 @@ def cmd_setup(args: argparse.Namespace) -> int:
         write_file(app_file_path, content, overwrite=False, dry_run=dry_run)
 
     # === Handle __main__.py ===
-    # Skip if project already has a CLI entrypoint in pyproject.toml
-    existing_cli = _find_existing_cli_entrypoint(project_dir, module_name)
-    if existing_cli:
-        print(f"ℹ️  Using existing CLI entrypoint: {existing_cli}")
-    else:
-        main_file = module_dir / "__main__.py"
-        main_fallback = module_dir / "__main__.new.py"
-        template = load_template("backend/__main__.py")
-        main_content = render_template(template, **tpl_vars)
+    main_file = module_dir / "__main__.py"
+    main_fallback = module_dir / "__main__.new.py"
+    template = load_template("backend/__main__.py")
+    main_content = render_template(template, **tpl_vars)
 
-        # Use write_file with fallback - it handles all cases:
-        # - File doesn't exist: create it
-        # - File exists with marker: update it
-        # - File exists without marker: write to fallback
+    # Check if project already has a CLI entrypoint in pyproject.toml
+    existing_cli = _find_existing_cli_entrypoint(project_dir, module_name)
+
+    if main_file.exists():
+        # File exists: update if it has the auto-upgrade marker, otherwise use fallback
         write_file(
             main_file,
             main_content,
-                overwrite=True,
+            overwrite=True,
             dry_run=dry_run,
             fallback_path=main_fallback,
         )
+    elif not existing_cli:
+        # No file and no existing entrypoint: create new __main__.py
+        write_file(
+            main_file,
+            main_content,
+            overwrite=False,
+            dry_run=dry_run,
+        )
+    # else: no file but has existing entrypoint - don't create (user has custom CLI setup)
 
     # === Update vite.config.js/ts ===
     frontend_dir = project_dir / "frontend"
@@ -1125,7 +1144,9 @@ def cmd_setup(args: argparse.Namespace) -> int:
         else:
             nl = b"\r\n" if b"\r\n" in gitignore_content else b"\n"
             suffix = b"" if gitignore_content.endswith(nl) else nl
-            gitignore_path.write_bytes(gitignore_content + suffix + gitignore_entry.encode() + nl)
+            gitignore_path.write_bytes(
+                gitignore_content + suffix + gitignore_entry.encode() + nl
+            )
             print(f"✅ Added {gitignore_entry} to .gitignore")
     elif dry_run:
         print(f"[DRY RUN] Would create .gitignore with {gitignore_entry}")
