@@ -119,7 +119,7 @@ Next steps:
 
 def load_template(path: str) -> str:
     """Load a template file from the template directory."""
-    return (TEMPLATE_DIR / path).read_text()
+    return (TEMPLATE_DIR / path).read_text("UTF-8")
 
 
 def find_module_name(project_dir: Path) -> str | None:
@@ -128,7 +128,7 @@ def find_module_name(project_dir: Path) -> str | None:
     if not pyproject.exists():
         return None
 
-    data = tomlkit.parse(pyproject.read_text())
+    data = tomlkit.parse(pyproject.read_text("UTF-8"))
 
     if "project" in data and "name" in data["project"]:
         name = data["project"]["name"]
@@ -190,7 +190,7 @@ def _find_app_via_entrypoint(
         return None
 
     try:
-        data = tomlkit.parse(pyproject.read_text())
+        data = tomlkit.parse(pyproject.read_text("UTF-8"))
     except Exception:
         return None
 
@@ -258,7 +258,7 @@ def _find_existing_cli_entrypoint(project_dir: Path, module_name: str) -> str | 
         return None
 
     try:
-        data = tomlkit.parse(pyproject.read_text())
+        data = tomlkit.parse(pyproject.read_text("UTF-8"))
     except Exception:
         return None
 
@@ -282,7 +282,7 @@ def _follow_init_reexport(init_file: Path, subpkg_dir: Path) -> tuple[Path, str]
     - from module.subpkg.mainapp import app
     """
     try:
-        content = init_file.read_text()
+        content = init_file.read_text("UTF-8")
     except Exception:
         return None
 
@@ -316,7 +316,7 @@ def _follow_init_reexport(init_file: Path, subpkg_dir: Path) -> tuple[Path, str]
 def _find_app_in_file(path: Path) -> str | None:
     """Find FastAPI app variable name in a file."""
     try:
-        content = path.read_text()
+        content = path.read_text("UTF-8")
     except Exception:
         return None
 
@@ -351,7 +351,7 @@ def patch_app_file(
         print(f"❌ Cannot patch {path} - file not found")
         return False
 
-    original_content = path.read_text()
+    original_content = path.read_text("UTF-8")
     marker = "from fastapi_vue import Frontend"
 
     if marker in original_content:
@@ -418,7 +418,7 @@ def patch_app_file(
         print(f"[DRY RUN] Would patch {path}")
         return True
 
-    path.write_text(content)
+    path.write_text(content, "UTF-8", newline="\n")
     print(f"✅ Patched {path}")
 
     if not lifespan_patched:
@@ -453,7 +453,7 @@ def patch_vite_config(
         print(f"❌ Cannot patch {path} - file not found")
         return False
 
-    original_content = path.read_text()
+    original_content = path.read_text("UTF-8")
     marker = "vite-plugin-fastapi"
 
     if marker in original_content:
@@ -508,7 +508,7 @@ def patch_vite_config(
         print(f"[DRY RUN] Would patch {path}")
         return True
 
-    path.write_text(content)
+    path.write_text(content, "UTF-8", newline="\n")
     print(f"✅ Patched {path}")
     return True
 
@@ -542,7 +542,7 @@ def patch_frontend_health_check(frontend_dir: Path, dry_run: bool = False) -> bo
         print("⚠️  No Vue file found to patch, skipping frontend health check")
         return False
 
-    original_content = target_file.read_text()
+    original_content = target_file.read_text("UTF-8")
 
     # Check if already patched
     if "/api/health" in original_content:
@@ -608,7 +608,7 @@ def patch_frontend_health_check(frontend_dir: Path, dry_run: bool = False) -> bo
         print(f"[DRY RUN] Would patch {target_file}")
         return True
 
-    target_file.write_text(content)
+    target_file.write_text(content, "UTF-8", newline="\n")
     print(f"✅ Patched {target_file}")
     return True
 
@@ -640,7 +640,7 @@ def write_file(
 
     # Check if content is the same
     if exists:
-        existing_content = path.read_text()
+        existing_content = path.read_text("UTF-8")
         if existing_content == content:
             print(f"✔️  {path} (already up to date)")
             return False
@@ -661,7 +661,7 @@ def write_file(
         return True
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content)
+    path.write_text(content, "UTF-8", newline="\n")
     if executable and sys.platform != "win32":
         path.chmod(path.stat().st_mode | 0o111)
     action = "Updated" if exists else "Created"
@@ -679,7 +679,7 @@ def _write_fallback_file(
     """Write content to a fallback .new.py file when original can't be overwritten."""
     # Check if fallback already has same content
     if fallback_path.exists():
-        if fallback_path.read_text() == content:
+        if fallback_path.read_text("UTF-8") == content:
             print(f"✔️  {fallback_path} (already up to date)")
             return False
 
@@ -689,7 +689,7 @@ def _write_fallback_file(
         return True
 
     fallback_path.parent.mkdir(parents=True, exist_ok=True)
-    fallback_path.write_text(content)
+    fallback_path.write_text(content, "UTF-8", newline="\n")
     if executable and sys.platform != "win32":
         fallback_path.chmod(fallback_path.stat().st_mode | 0o111)
     print(f"✅ Created {fallback_path} (original customized by user)")
@@ -991,7 +991,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
     for template_file in template_fastapi_vue_dir.iterdir():
         if template_file.is_file():
             dest_path = fastapi_vue_scripts / template_file.name
-            template = template_file.read_text()
+            template = template_file.read_text("UTF-8")
             content = render_template(template, **tpl_vars)
             write_file(
                 dest_path,
@@ -1089,7 +1089,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
     # === Update pyproject.toml ===
     pyproject_path = project_dir / "pyproject.toml"
     if pyproject_path.exists():
-        old_content = pyproject_path.read_text()
+        old_content = pyproject_path.read_text("UTF-8")
         data = tomlkit.parse(old_content)
 
         updated = merge_pyproject(data, PYPROJECT_ADDITIONS, module_name)
@@ -1108,7 +1108,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         elif dry_run:
             print(f"[DRY RUN] Would update {pyproject_path}")
         else:
-            pyproject_path.write_text(new_content)
+            pyproject_path.write_text(new_content, "UTF-8", newline="\n")
             print(f"✅ Updated {pyproject_path}")
 
     # === Add dependencies using uv ===
@@ -1151,7 +1151,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
     elif dry_run:
         print(f"[DRY RUN] Would create .gitignore with {gitignore_entry}")
     else:
-        gitignore_path.write_text(f"{gitignore_entry}\n")
+        gitignore_path.write_text(f"{gitignore_entry}\n", "UTF-8", newline="\n")
         print("✅ Created .gitignore")
 
     print()
