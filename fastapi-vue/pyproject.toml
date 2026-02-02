@@ -1,0 +1,23 @@
+[project]
+name = "fastapi-vue"
+dynamic = ["version"]
+description = "Serves Vue assets on a FastAPI app. Use fastapi-vue-setup tool to add Vue build to your package."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115.0",
+    "zstandard>=0.23.0",
+    "blake3>=1.0.8",
+]
+
+[project.urls]
+Homepage = "https://git.zi.fi/LeoVasanko/fastapi-vue"
+Repository = "https://github.com/LeoVasanko/fastapi-vue"
+
+[build-system]
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "vcs"
+raw-options.root = ".."
