@@ -3,6 +3,7 @@
 import asyncio
 import subprocess
 from collections.abc import Coroutine
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
@@ -58,14 +59,7 @@ class ProcessGroup:
 
     async def __aexit__(self, exc_type, *_):
         """Wait for one process to exit, terminate others, then wait for all."""
-        cleanup_task = asyncio.create_task(
-            self._cleanup(immediate=exc_type is not None)
-        )
-        try:
-            await asyncio.shield(cleanup_task)
-        except asyncio.CancelledError:
-            # Shield was cancelled but cleanup_task continues - wait for it
-            await cleanup_task
+        await self._cleanup(immediate=exc_type is not None)
 
     async def _cleanup(self, immediate: bool = False):
         running = [p for p in self._procs if p.returncode is None]
@@ -74,51 +68,49 @@ class ProcessGroup:
 
         if not immediate:
             # Wait for any one process to exit
-            await asyncio.wait(
-                [asyncio.create_task(p.wait()) for p in running],
-                return_when=asyncio.FIRST_COMPLETED,
-            )
+            with suppress(asyncio.CancelledError):
+                await asyncio.wait(
+                    [asyncio.create_task(p.wait()) for p in running],
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
 
         # Terminate remaining processes
         for p in self._procs:
             if p.returncode is None:
-                try:
+                with suppress(ProcessLookupError):
                     p.terminate()
-                except ProcessLookupError:
-                    pass
 
-        # Wait for all to finish (with overall timeout)
+        # Wait for all to finish (with overall timeout), shielded from cancellation
         still_running = [p for p in self._procs if p.returncode is None]
         if still_running:
-            try:
-                await asyncio.wait_for(
-                    asyncio.gather(*[p.wait() for p in still_running]),
-                    timeout=10,
-                )
-            except TimeoutError:
-                for p in self._procs:
-                    if p.returncode is None:
-                        try:
-                            p.kill()
-                        except ProcessLookupError:
-                            pass
-                        await p.wait()
+            with suppress(asyncio.CancelledError):
+                try:
+                    await asyncio.shield(
+                        asyncio.wait_for(
+                            asyncio.gather(*[p.wait() for p in still_running]),
+                            timeout=10,
+                        )
+                    )
+                except TimeoutError:
+                    for p in self._procs:
+                        if p.returncode is None:
+                            with suppress(ProcessLookupError):
+                                p.kill()
+                            await p.wait()
 
 
 async def check_ports_free(*urls: str) -> None:
     """Verify URLs are not responding (ports are free). Raise SystemExit if any respond."""
+
+    async def check(client: httpx.AsyncClient, url: str) -> None:
+        with suppress(httpx.RequestError):
+            res = await client.get(url, timeout=0.1)
+            server = res.headers.get("server", "server")
+            logger.warning("Conflicting %s already running at %s", server, url)
+            raise SystemExit(1)
+
     async with httpx.AsyncClient() as client:
-        for url in urls:
-            try:
-                res = await client.get(url, timeout=0.1)
-                logger.warning(
-                    "Conflicting %s already running at %s",
-                    res.headers.get("server", "server"),
-                    url,
-                )
-                raise SystemExit(1)
-            except httpx.RequestError:
-                pass  # Expected - port is free
+        await asyncio.gather(*[check(client, url) for url in urls])
 
 
 async def ready(url: str, path: str = "") -> None:
