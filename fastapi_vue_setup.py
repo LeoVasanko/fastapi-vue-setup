@@ -7,6 +7,7 @@ Usage:
 
 Options:
     --module-name NAME      Python module name (auto-detected from pyproject.toml)
+    --ports DEFAULT,VITE,DEV  Port configuration (default: 3100,3100,3200)
     --dry-run               Show what would be done without making changes
 """
 
@@ -23,6 +24,10 @@ import tomlkit
 
 # Template directory
 TEMPLATE_DIR = Path(__file__).parent / "template"
+
+# Default ports: (default, vite, dev)
+# If vite == dev, dev is incremented by 100
+DEFAULT_PORTS = (3100, 3100, 3200)
 
 # Marker comment indicating file can be auto-upgraded
 # Users should remove this line to prevent automatic updates
@@ -115,6 +120,80 @@ Next steps:
 # =============================================================================
 # Utility functions
 # =============================================================================
+
+
+def parse_ports(ports_str: str | None) -> tuple[int, int, int]:
+    """Parse comma-separated port string into (default, vite, dev) tuple.
+
+    If dev == vite, dev is incremented by 100 to avoid conflicts.
+    """
+    if not ports_str:
+        return DEFAULT_PORTS
+
+    parts = ports_str.split(",")
+    if len(parts) == 1:
+        default = int(parts[0])
+        vite = default
+        dev = default + 100
+    elif len(parts) == 2:
+        default = int(parts[0])
+        vite = int(parts[1])
+        dev = vite + 100 if vite == default else default + 100
+    elif len(parts) == 3:
+        default = int(parts[0])
+        vite = int(parts[1])
+        dev = int(parts[2])
+    else:
+        raise ValueError(f"Invalid ports format: {ports_str}")
+
+    # Auto-adjust dev if it conflicts with vite
+    if dev == vite:
+        dev = vite + 100
+
+    return default, vite, dev
+
+
+def extract_existing_ports(project_dir: Path) -> tuple[int, int, int] | None:
+    """Extract existing port configuration from project files.
+
+    Returns (default, vite, dev) or None if not found.
+    """
+    module_name = find_module_name(project_dir)
+    if not module_name:
+        return None
+
+    default_port = None
+    vite_port = None
+    dev_port = None
+
+    # Try to extract DEFAULT_PORT from __main__.py
+    main_file = project_dir / module_name / "__main__.py"
+    if main_file.exists():
+        content = main_file.read_text("UTF-8")
+        match = re.search(r"DEFAULT_PORT\s*=\s*(\d+)", content)
+        if match:
+            default_port = int(match.group(1))
+
+    # Try to extract ports from devserver.py
+    devserver_file = project_dir / "scripts" / "devserver.py"
+    if devserver_file.exists():
+        content = devserver_file.read_text("UTF-8")
+        match = re.search(r"DEFAULT_VITE_PORT\s*=\s*(\d+)", content)
+        if match:
+            vite_port = int(match.group(1))
+        match = re.search(r"DEFAULT_DEV_PORT\s*=\s*(\d+)", content)
+        if match:
+            dev_port = int(match.group(1))
+
+    # Return only if we found at least one port
+    if default_port is not None or vite_port is not None or dev_port is not None:
+        return (
+            default_port or DEFAULT_PORTS[0],
+            vite_port or DEFAULT_PORTS[1],
+            dev_port or DEFAULT_PORTS[2],
+        )
+
+    return None
 
 
 def load_template(path: str) -> str:
@@ -943,10 +1022,31 @@ def cmd_setup(args: argparse.Namespace) -> int:
 
     print(f"📦 Module: {module_name}")
 
+    # Determine port configuration
+    # Priority: --ports argument > existing project values > defaults
+    if args.ports:
+        default_port, vite_port, dev_port = parse_ports(args.ports)
+        ports_note = "(--ports)"
+    else:
+        existing_ports = extract_existing_ports(project_dir)
+        if existing_ports:
+            default_port, vite_port, dev_port = existing_ports
+            ports_note = "(kept for upgrade)"
+        else:
+            default_port, vite_port, dev_port = DEFAULT_PORTS
+            ports_note = "(--ports to override)"
+
+    print(
+        f"📡 Ports: default={default_port}, vite={vite_port}, dev={dev_port} {ports_note}"
+    )
+
     # Template variables
     tpl_vars = {
         "MODULE_NAME": module_name,
         "PROJECT_TITLE": project_title,
+        "TEMPLATE_DEFAULT_PORT": str(default_port),
+        "TEMPLATE_VITE_PORT": str(vite_port),
+        "TEMPLATE_DEV_PORT": str(dev_port),
     }
 
     module_dir = project_dir / module_name
@@ -1137,7 +1237,15 @@ def cmd_setup(args: argparse.Namespace) -> int:
         print("✅ Created .gitignore")
 
     # === Add dependencies using uv ===
-    uv_add_main = ["uv", "add", "-q", "-U", "--no-sync", "fastapi[standard]", "fastapi-vue"]
+    uv_add_main = [
+        "uv",
+        "add",
+        "-q",
+        "-U",
+        "--no-sync",
+        "fastapi[standard]",
+        "fastapi-vue",
+    ]
     uv_add_dev = ["uv", "add", "-q", "-U", "--group", "dev", "httpx"]
     if dry_run:
         print(f"[DRY RUN] Would run: {' '.join(uv_add_main)}")
@@ -1215,6 +1323,7 @@ Examples:
   fastapi-vue-setup my-new-project     Create a new project from scratch
   fastapi-vue-setup .                  Set up integration in current directory
   fastapi-vue-setup . --dry-run        Preview what would be done
+  fastapi-vue-setup . --ports 8000,5173,8080  Custom ports (default,vite,dev)
 """,
     )
     parser.add_argument(
@@ -1224,6 +1333,11 @@ Examples:
         help="Project directory (use . for current directory)",
     )
     parser.add_argument("--module-name", help="Python module name (auto-detected)")
+    parser.add_argument(
+        "--ports",
+        metavar="DEFAULT,VITE,DEV",
+        help="Port configuration as comma-separated values (default: 3100,3100,3200)",
+    )
     parser.add_argument(
         "--dry-run", action="store_true", help="Show what would be done"
     )
