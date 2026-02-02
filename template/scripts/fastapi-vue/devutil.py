@@ -23,7 +23,7 @@ class ProcessGroup:
         self, *cmd: str, cwd: str | None = None
     ) -> asyncio.subprocess.Process:
         """Spawn a subprocess and track it."""
-        cmd_name = Path(cmd[0]).name
+        cmd_name = Path(cmd[0]).stem
         logger.info(">>> %s", " ".join([cmd_name, *cmd[1:]]))
         proc = await asyncio.create_subprocess_exec(*cmd, cwd=cwd)
         self._procs.append(proc)
