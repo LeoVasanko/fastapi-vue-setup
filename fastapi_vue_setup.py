@@ -896,6 +896,9 @@ def cmd_setup(args: argparse.Namespace) -> int:
     - Patching existing projects with integration files
     - Updating already-patched projects
     """
+    # Clear any existing virtual environment to avoid uv using the wrong one (warning)
+    os.environ.pop("VIRTUAL_ENV", None)
+
     project_path = Path(args.project_dir)
 
     # Handle both "." and "/path/to/project"
@@ -1111,27 +1114,6 @@ def cmd_setup(args: argparse.Namespace) -> int:
             pyproject_path.write_text(new_content, "UTF-8", newline="\n")
             print(f"✅ Updated {pyproject_path}")
 
-    # === Add dependencies using uv ===
-    if dry_run:
-        print("[DRY RUN] Would run: uv add -U 'fastapi[standard]' fastapi-vue")
-        print("[DRY RUN] Would run: uv add -U --group dev httpx")
-    else:
-        print("📦 Adding dependencies...")
-        result = subprocess.run(
-            ["uv", "add", "-U", "fastapi[standard]", "fastapi-vue"],
-            cwd=project_dir,
-            check=False,
-        )
-        if result.returncode != 0:
-            print("⚠️  Failed to add main dependencies")
-        result = subprocess.run(
-            ["uv", "add", "-U", "--group", "dev", "httpx"],
-            cwd=project_dir,
-            check=False,
-        )
-        if result.returncode != 0:
-            print("⚠️  Failed to add dev dependencies")
-
     # === Update .gitignore ===
     gitignore_path = project_dir / ".gitignore"
     gitignore_entry = f"/{module_name}/frontend-build"
@@ -1153,6 +1135,21 @@ def cmd_setup(args: argparse.Namespace) -> int:
     else:
         gitignore_path.write_text(f"{gitignore_entry}\n", "UTF-8", newline="\n")
         print("✅ Created .gitignore")
+
+    # === Add dependencies using uv ===
+    uv_add_main = ["uv", "add", "-q", "-U", "--no-sync", "fastapi[standard]", "fastapi-vue"]
+    uv_add_dev = ["uv", "add", "-q", "-U", "--group", "dev", "httpx"]
+    if dry_run:
+        print(f"[DRY RUN] Would run: {' '.join(uv_add_main)}")
+        print(f"[DRY RUN] Would run: {' '.join(uv_add_dev)}")
+    else:
+        print("📦 Adding dependencies...")
+        result = subprocess.run(uv_add_main, cwd=project_dir, check=False)
+        if result.returncode != 0:
+            print("⚠️  Failed to add main dependencies")
+        result = subprocess.run(uv_add_dev, cwd=project_dir, check=False)
+        if result.returncode != 0:
+            print("⚠️  Failed to add dev dependencies")
 
     print()
     print("=" * 60)
