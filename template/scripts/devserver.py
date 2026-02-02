@@ -4,12 +4,10 @@
 
 import argparse
 import asyncio
-import contextlib
 import os
 import sys
+from contextlib import suppress
 from pathlib import Path
-
-from fastapi_vue import server
 
 # Import util.py from scripts/fastapi-vue (not a package, so we adjust sys.path)
 sys.path.insert(0, str(Path(__file__).with_name("fastapi-vue")))
@@ -34,7 +32,7 @@ async def run_devserver(frontend: str, backend: str) -> None:
         raise SystemExit(1)
 
     viteurl, npm_install, vite = setup_vite(frontend, DEFAULT_VITE_PORT)
-    backurl, module, backend_config = setup_fastapi(
+    backurl, uvicorn = setup_fastapi(
         backend, "MODULE_NAME.APP_MODULE:APP_VAR", DEFAULT_DEV_PORT
     )
 
@@ -45,15 +43,8 @@ async def run_devserver(frontend: str, backend: str) -> None:
     async with ProcessGroup() as pg:
         npm_i = await pg.spawn(*npm_install, cwd=front)
         await check_ports_free(viteurl, backurl)
-
-        # Run backend in a thread (server.run is blocking)
-        loop = asyncio.get_event_loop()
-        loop.run_in_executor(None, lambda: server.run(module, **backend_config))
-
-        # Wait for both install and backend to be ready
+        await pg.spawn(*uvicorn)
         await pg.wait(npm_i, ready(backurl, path="/api/health?from=devserver.py"))
-
-        # Start Vite dev server (ProcessGroup waits for any exit, then terminates others)
         await pg.spawn(*vite, cwd=front)
 
 
@@ -75,7 +66,7 @@ def main():
         help=f"FastAPI backend endpoint (default: localhost:{DEFAULT_DEV_PORT})",
     )
     args = parser.parse_args()
-    with contextlib.suppress(KeyboardInterrupt):
+    with suppress(KeyboardInterrupt):
         asyncio.run(run_devserver(args.frontend, args.backend))
 
 
@@ -84,7 +75,8 @@ HELP_EPILOG = """
   scripts/devserver.py 3000                  # Vite on localhost:3000
   scripts/devserver.py :3000 --backend 8000  # *:3000, localhost:8000
 
-  JS_RUNTIME environment variable can be used to select the JS runtime
+  JS_RUNTIME environment variable can be used to select the JS runtime:
+  npm, deno, bun, or full path to the runtime executable (node maps to npm).
 """
 
 

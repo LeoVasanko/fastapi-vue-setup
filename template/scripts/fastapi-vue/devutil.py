@@ -2,6 +2,7 @@
 
 import asyncio
 import subprocess
+import sys
 from collections.abc import Coroutine
 from contextlib import suppress
 from pathlib import Path
@@ -159,10 +160,10 @@ def setup_vite(
 
 def setup_fastapi(
     endpoint: str, module: str, default_port: int = 8000
-) -> tuple[str, str, dict]:
-    """Parse backend endpoint and build server.run() config.
+) -> tuple[str, list[str]]:
+    """Parse backend endpoint and build uvicorn command.
 
-    Returns (url, module, config_dict).
+    Returns (url, uvicorn_cmd).
     Raises SystemExit(1) on invalid config.
     """
     endpoints = parse_endpoint(endpoint, default_port)
@@ -173,11 +174,17 @@ def setup_fastapi(
 
     host = endpoints[0]["host"]
     port = endpoints[0]["port"]
+    reload_dir = module.split(".")[0]  # Don't reload on frontend changes
 
-    config = {
-        "listen": f"{host}:{port}",
-        "reload": True,
-        "reload_dirs": [module.split(".")[0]],  # Don't reload on frontend changes
-        "forwarded_allow_ips": "*",
-    }
-    return f"http://{host}:{port}", module, config
+    cmd = [
+        sys.executable,
+        "-m",
+        "uvicorn",
+        module,
+        f"--host={host}",
+        f"--port={port}",
+        "--reload",
+        f"--reload-dir={reload_dir}",
+        "--forwarded-allow-ips=*",
+    ]
+    return f"http://{host}:{port}", cmd
