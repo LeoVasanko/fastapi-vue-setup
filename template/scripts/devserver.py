@@ -13,6 +13,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).with_name("fastapi-vue")))
 from devutil import (  # type: ignore
     ProcessGroup,
+    check_ports_free,
     logger,
     ready,
     setup_fastapi,
@@ -36,7 +37,7 @@ async def run_devserver(frontend: str, backend: str) -> None:
 
     async with ProcessGroup() as pg:
         npm_i = await pg.spawn(*npm_install, cwd=front)
-        await asyncio.sleep(0.2)  # reduce message overlap
+        await check_ports_free(viteurl, backurl)
         await pg.spawn(
             *fastapi,
             "--reload",
