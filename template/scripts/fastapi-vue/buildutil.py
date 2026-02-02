@@ -179,7 +179,7 @@ def build(folder: str = "frontend") -> None:
         raise SystemExit(1)
 
     def run(cmd):
-        display_cmd = [Path(cmd[0]).name, *cmd[1:]]
+        display_cmd = [Path(cmd[0]).stem, *cmd[1:]]
         logger.info("### %s", " ".join(display_cmd))
         subprocess.run(cmd, check=True, cwd=folder)
 
