@@ -580,7 +580,7 @@ def patch_vite_config(
 
     # Check if content actually changed
     if content == original_content:
-        print(f"⚠️  Skipping {path} (no changes needed)")
+        print(f"ℹ️  Skipping {path} (no changes needed)")
         return False
 
     if dry_run:
@@ -618,7 +618,7 @@ def patch_frontend_health_check(frontend_dir: Path, dry_run: bool = False) -> bo
             target_file = app_vue
 
     if target_file is None:
-        print("⚠️  No Vue file found to patch, skipping frontend health check")
+        print("ℹ️  No Vue file found to patch, skipping frontend health check")
         return False
 
     original_content = target_file.read_text("UTF-8")
@@ -663,7 +663,7 @@ def patch_frontend_health_check(frontend_dir: Path, dry_run: bool = False) -> bo
     else:
         # Minimal App.vue - only patch if it contains the default welcome message
         if "<h1>You did it!</h1>" not in content:
-            print(f"⚠️  Skipping {target_file} (not a default Vue template)")
+            print(f"ℹ️  Skipping {target_file} (not a default Vue template)")
             return False
         # Insert before the </p> tag
         template_end = content.find("</template>")
@@ -680,7 +680,7 @@ def patch_frontend_health_check(frontend_dir: Path, dry_run: bool = False) -> bo
 
     # Check if content actually changed
     if content == original_content:
-        print(f"⚠️  Skipping {target_file} (no changes needed)")
+        print(f"ℹ️  Skipping {target_file} (no changes needed)")
         return False
 
     if dry_run:
@@ -714,7 +714,7 @@ def write_file(
     """
     exists = path.exists()
     if exists and not overwrite:
-        print(f"ℹ️  Skipping {path} (exists)")
+        print(f"⚠️  Skipping {path} (exists)")
         return False
 
     # Check if content is the same
@@ -1163,7 +1163,9 @@ def cmd_setup(args: argparse.Namespace) -> int:
             overwrite=False,
             dry_run=dry_run,
         )
-    # else: no file but has existing entrypoint - don't create (user has custom CLI setup)
+    else:
+        # No file but has existing entrypoint - don't create (user has custom CLI setup)
+        print(f"ℹ️  Skipping __main__.py (package already has CLI: {existing_cli})")
 
     # === Update vite.config.js/ts ===
     frontend_dir = project_dir / "frontend"
