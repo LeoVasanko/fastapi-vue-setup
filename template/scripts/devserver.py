@@ -27,15 +27,15 @@ async def run_devserver(frontend: str, backend: str) -> None:
         logger.warning("Frontend source not found at %s", front)
         raise SystemExit(1)
 
-    frontend_url, npm_install, vite = setup_vite(frontend)
-    backend_url, fastapi = setup_fastapi(backend, "MODULE_NAME.APP_MODULE:APP_VAR")
+    viteurl, npm_install, vite = setup_vite(frontend)
+    backurl, fastapi = setup_fastapi(backend, "MODULE_NAME.APP_MODULE:APP_VAR")
 
     # Tell the everyone where the frontend and backend are (vite proxy, etc)
-    os.environ["FASTAPI_VUE_FRONTEND_URL"] = frontend_url
-    os.environ["FASTAPI_VUE_BACKEND_URL"] = backend_url
+    os.environ["FASTAPI_VUE_FRONTEND_URL"] = viteurl
+    os.environ["FASTAPI_VUE_BACKEND_URL"] = backurl
 
     async with ProcessGroup() as pg:
-        install_proc = await pg.spawn(*npm_install, cwd=front)
+        npm_i = await pg.spawn(*npm_install, cwd=front)
         await asyncio.sleep(0.2)  # reduce message overlap
         await pg.spawn(
             *fastapi,
@@ -46,9 +46,7 @@ async def run_devserver(frontend: str, backend: str) -> None:
         )
 
         # Wait for both install and backend to be ready
-        async with asyncio.TaskGroup() as tg:
-            tg.create_task(pg.wait(install_proc))
-            tg.create_task(ready(backend_url, path="/api/health?from=devserver.py"))
+        await pg.wait(npm_i, ready(backurl, path="/api/health?from=devserver.py"))
 
         # Start Vite dev server (ProcessGroup waits for any exit, then terminates others)
         await pg.spawn(*vite, cwd=front)
