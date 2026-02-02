@@ -9,6 +9,8 @@ import os
 import sys
 from pathlib import Path
 
+from fastapi_vue import server
+
 # Import util.py from scripts/fastapi-vue (not a package, so we adjust sys.path)
 sys.path.insert(0, str(Path(__file__).with_name("fastapi-vue")))
 from devutil import (  # type: ignore
@@ -20,6 +22,9 @@ from devutil import (  # type: ignore
     setup_vite,
 )
 
+DEFAULT_VITE_PORT = TEMPLATE_VITE_PORT
+DEFAULT_DEV_PORT = TEMPLATE_DEV_PORT
+
 
 async def run_devserver(frontend: str, backend: str) -> None:
     reporoot = Path(__file__).parent.parent
@@ -28,8 +33,10 @@ async def run_devserver(frontend: str, backend: str) -> None:
         logger.warning("Frontend source not found at %s", front)
         raise SystemExit(1)
 
-    viteurl, npm_install, vite = setup_vite(frontend)
-    backurl, fastapi = setup_fastapi(backend, "MODULE_NAME.APP_MODULE:APP_VAR")
+    viteurl, npm_install, vite = setup_vite(frontend, DEFAULT_VITE_PORT)
+    backurl, module, backend_config = setup_fastapi(
+        backend, "MODULE_NAME.APP_MODULE:APP_VAR", DEFAULT_DEV_PORT
+    )
 
     # Tell the everyone where the frontend and backend are (vite proxy, etc)
     os.environ["FASTAPI_VUE_FRONTEND_URL"] = viteurl
@@ -38,13 +45,10 @@ async def run_devserver(frontend: str, backend: str) -> None:
     async with ProcessGroup() as pg:
         npm_i = await pg.spawn(*npm_install, cwd=front)
         await check_ports_free(viteurl, backurl)
-        await pg.spawn(
-            *fastapi,
-            "--reload",
-            "--reload-dir=MODULE_NAME",  # Don't reload on frontend changes
-            "--forwarded-allow-ips=*",
-            cwd=reporoot,
-        )
+
+        # Run backend in a thread (server.run is blocking)
+        loop = asyncio.get_event_loop()
+        loop.run_in_executor(None, lambda: server.run(module, **backend_config))
 
         # Wait for both install and backend to be ready
         await pg.wait(npm_i, ready(backurl, path="/api/health?from=devserver.py"))
@@ -63,12 +67,12 @@ def main():
         "frontend",
         nargs="?",
         metavar="host:port",
-        help="Vite frontend endpoint (default: localhost:5173)",
+        help=f"Vite frontend endpoint (default: localhost:{DEFAULT_VITE_PORT})",
     )
     parser.add_argument(
         "--backend",
         metavar="host:port",
-        help="FastAPI backend endpoint (default: localhost:5180)",
+        help=f"FastAPI backend endpoint (default: localhost:{DEFAULT_DEV_PORT})",
     )
     args = parser.parse_args()
     with contextlib.suppress(KeyboardInterrupt):

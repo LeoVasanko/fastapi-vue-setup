@@ -11,9 +11,6 @@ import httpx
 from buildutil import find_dev_tool, find_install_tool, logger
 from fastapi_vue.hostutil import parse_endpoint
 
-DEFAULT_VITE_PORT = 5173
-DEFAULT_BACKEND_PORT = 5180
-
 
 class ProcessGroup:
     """Manage async subprocesses with automatic cleanup, like TaskGroup for processes."""
@@ -134,13 +131,15 @@ async def ready(url: str, path: str = "") -> None:
                 await asyncio.sleep(0.1)
 
 
-def setup_vite(endpoint: str) -> tuple[str, list[str], list[str]]:
+def setup_vite(
+    endpoint: str, default_port: int = 5173
+) -> tuple[str, list[str], list[str]]:
     """Parse frontend endpoint and build commands.
 
     Returns (url, install_cmd, dev_cmd).
     Raises SystemExit(1) on invalid config.
     """
-    endpoints = parse_endpoint(endpoint, DEFAULT_VITE_PORT)
+    endpoints = parse_endpoint(endpoint, default_port)
 
     if "uds" in endpoints[0]:
         logger.warning("Unix sockets not supported with vite devserver")
@@ -153,18 +152,17 @@ def setup_vite(endpoint: str) -> tuple[str, list[str], list[str]]:
     dev_cmd = find_dev_tool()
     if host != "localhost":
         dev_cmd.append("--host" if len(endpoints) > 1 else f"--host={host}")
-    if port != 5173:
-        dev_cmd.append(f"--port={port}")
+    dev_cmd.append(f"--port={port}")
 
     return f"http://{host}:{port}", install_cmd, dev_cmd
 
 
 def setup_fastapi(
-    endpoint: str, module: str, default_port: int = DEFAULT_BACKEND_PORT
-) -> tuple[str, list[str]]:
-    """Parse backend endpoint and build fastapi dev command.
+    endpoint: str, module: str, default_port: int = 8000
+) -> tuple[str, str, dict]:
+    """Parse backend endpoint and build server.run() config.
 
-    Returns (url, cmd).
+    Returns (url, module, config_dict).
     Raises SystemExit(1) on invalid config.
     """
     endpoints = parse_endpoint(endpoint, default_port)
@@ -176,14 +174,10 @@ def setup_fastapi(
     host = endpoints[0]["host"]
     port = endpoints[0]["port"]
 
-    cmd = [
-        "fastapi",
-        "dev",
-        "--entrypoint",
-        module,
-        "--host",
-        host,
-        "--port",
-        str(port),
-    ]
-    return f"http://{host}:{port}", cmd
+    config = {
+        "listen": f"{host}:{port}",
+        "reload": True,
+        "reload_dirs": [module.split(".")[0]],  # Don't reload on frontend changes
+        "forwarded_allow_ips": "*",
+    }
+    return f"http://{host}:{port}", module, config
