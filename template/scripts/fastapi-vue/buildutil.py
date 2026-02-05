@@ -134,7 +134,7 @@ def find_dev_tool() -> list[str]:
     Raises RuntimeError if no runtime is found.
     """
     dev_args = {
-        "deno": ("run", "dev", "--"),
+        "deno": ("run", "-A", "npm:vite"),
         "npm": ("--silent", "run", "dev", "--"),
         "bun": ("run", "dev", "--"),
     }
