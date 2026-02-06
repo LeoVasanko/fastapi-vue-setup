@@ -16,6 +16,7 @@ from devutil import (  # type: ignore
     check_ports_free,
     logger,
     ready,
+    setup_cli,
     setup_vite,
 )
 
