@@ -38,7 +38,7 @@ def ruff_sort_imports(files: list[Path], dry_run: bool = False) -> None:
     if not py_files:
         return
     if dry_run:
-        print(f"[DRY RUN] Would run ruff import sorting on {len(py_files)} files")
+        print(f"🔧 Would run ruff import sorting on {len(py_files)} files")
         return
     print("🔧 Ruff isort on modified files")
     subprocess.run(
@@ -582,7 +582,7 @@ def patch_app_file(
         return False
 
     if dry_run:
-        print(f"[DRY RUN] Would patch {path}")
+        print(f"✅ Would patch {path}")
         return True
 
     path.write_text(content, "UTF-8", newline="\n")
@@ -673,7 +673,7 @@ def patch_vite_config(
         return False
 
     if dry_run:
-        print(f"[DRY RUN] Would patch {path}")
+        print(f"✅ Would patch {path}")
         return True
 
     path.write_text(content, "UTF-8", newline="\n")
@@ -773,7 +773,7 @@ def patch_frontend_health_check(frontend_dir: Path, dry_run: bool = False) -> bo
         return False
 
     if dry_run:
-        print(f"[DRY RUN] Would patch {target_file}")
+        print(f"✅ Would patch {target_file}")
         return True
 
     target_file.write_text(content, "UTF-8", newline="\n")
@@ -825,7 +825,7 @@ def write_file(
 
     if dry_run:
         action = "overwrite" if exists else "create"
-        print(f"[DRY RUN] Would {action} {path}")
+        print(f"✅ Would {action} {path}")
         return True
 
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -854,7 +854,7 @@ def _write_fallback_file(
             return False
 
     if dry_run:
-        print(f"[DRY RUN] Would create {fallback_path} (original customized by user)")
+        print(f"✅ Would create {fallback_path} (original customized by user)")
         _new_files_written.append((fallback_path, original_path))
         return True
 
@@ -997,7 +997,7 @@ def ensure_python_project(project_dir: Path, dry_run: bool = False) -> bool:
         return True
 
     if dry_run:
-        print(f"[DRY RUN] Would run: uv init {project_dir}")
+        print(f"📦 Would run: uv init {project_dir}")
         return True
 
     print("📦 No pyproject.toml found, initializing Python project...")
@@ -1041,7 +1041,7 @@ def ensure_frontend(project_dir: Path, dry_run: bool = False) -> bool:
     create_cmd = create_vue_commands[js_name]
 
     if dry_run:
-        print(f"[DRY RUN] Would run: {' '.join(create_cmd)}")
+        print(f"🎨 Would run: {' '.join(create_cmd)}")
         return True
 
     print("🎨 No frontend/ found, creating Vue project...")
@@ -1085,7 +1085,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
     # Create project directory if it doesn't exist
     if not project_dir.exists():
         if dry_run:
-            print(f"[DRY RUN] Would create directory: {project_dir}")
+            print(f"✅ Would create directory: {project_dir}")
         else:
             project_dir.mkdir(parents=True)
             print(f"✅ Created {project_dir}")
@@ -1108,12 +1108,9 @@ def cmd_setup(args: argparse.Namespace) -> int:
     if not module_name:
         # Derive from directory name
         module_name = project_dir.name.replace("-", "_")
-        print(f"📦 Using module name from directory: {module_name}")
-
-    # Title for templates
-    project_title = module_name.replace("_", " ").title()
-
-    print(f"📦 Module: {module_name}")
+        print(f"📦 Module: {module_name} (from directory name)")
+    else:
+        print(f"📦 Module: {module_name}")
 
     # Determine port configuration
     # Priority: --ports argument > existing project values > defaults
@@ -1132,6 +1129,9 @@ def cmd_setup(args: argparse.Namespace) -> int:
     print(
         f"📡 Ports: default={default_port}, vite={vite_port}, dev={dev_port} {ports_note}"
     )
+
+    # Title for templates
+    project_title = module_name.replace("_", " ").title()
 
     # Template variables
     tpl_vars = {
@@ -1179,7 +1179,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
     obsolete_util = fastapi_vue_scripts / "util.py"
     if obsolete_util.exists():
         if dry_run:
-            print(f"[DRY RUN] Would remove obsolete {obsolete_util}")
+            print(f"🗑️ Would remove obsolete {obsolete_util}")
         else:
             obsolete_util.unlink()
             print(f"🗑️  Removed obsolete {obsolete_util}")
@@ -1306,7 +1306,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         if new_content == old_content:
             print(f"✔️  {pyproject_path} (already up to date)")
         elif dry_run:
-            print(f"[DRY RUN] Would update {pyproject_path}")
+            print(f"✅ Would update {pyproject_path}")
         else:
             pyproject_path.write_text(new_content, "UTF-8", newline="\n")
             print(f"✅ Updated {pyproject_path}")
@@ -1319,7 +1319,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         if b"frontend-build" in gitignore_content:
             print("✔️  .gitignore (frontend-build already ignored)")
         elif dry_run:
-            print(f"[DRY RUN] Would add {gitignore_entry} to .gitignore")
+            print(f"✅ Would add {gitignore_entry} to .gitignore")
         else:
             nl = b"\r\n" if b"\r\n" in gitignore_content else b"\n"
             suffix = b"" if gitignore_content.endswith(nl) else nl
@@ -1328,7 +1328,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
             )
             print(f"✅ Added {gitignore_entry} to .gitignore")
     elif dry_run:
-        print(f"[DRY RUN] Would create .gitignore with {gitignore_entry}")
+        print(f"✅ Would create .gitignore with {gitignore_entry}")
     else:
         gitignore_path.write_text(f"{gitignore_entry}\n", "UTF-8", newline="\n")
         print("✅ Created .gitignore")
@@ -1336,7 +1336,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
     # === Add dependencies using uv ===
     ruff_sort_imports(_python_files_to_format, dry_run=dry_run)
     if dry_run:
-        print("[DRY RUN] Would add: fastapi[standard], fastapi-vue, httpx (dev only)")
+        print("📦 Would add: fastapi[standard], fastapi-vue, httpx (dev only)")
     else:
         print("📦 Dependencies")
         uv_add_packages(["fastapi[standard]", "fastapi-vue"], cwd=project_dir)
