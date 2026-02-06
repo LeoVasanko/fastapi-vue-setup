@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fnmatch
 import logging
 import mimetypes
 import time
@@ -44,9 +45,9 @@ class Frontend:
 
     Features:
     - Automatic zstd compression for compressible files
-    - ETag-based caching with configurable cache headers
+    - ETag-based caching of immutable assets
     - SPA (Single Page Application) support
-    - Favicon handling from hashed assets
+    - /favicon.ico with correct MIME type (image/png etc)
     - Dev mode: indexes files but returns error directing to Vite server
 
     Args:
@@ -54,7 +55,7 @@ class Frontend:
         index: Name of the index file (default: "index.html")
         spa: Enable SPA mode - serve index.html for unknown routes (default: False)
         cached: Path prefixes that are immutable (default: "/assets/")
-        favicon: E.g. /assets/logo.png will serve /assets/logo*.png as /favicon.ico
+        favicon: May use wildcards of full path. E.g. /assets/logo*.png matches logo.hash.png created by Vite
         zstdlevel: Zstd compression level (default: 18)
     """
 
@@ -142,15 +143,11 @@ class Frontend:
                     zstd = None
                 www[name] = data, zstd, headers
         if self.favicon:
-            p = PurePosixPath(self.favicon)
-            base = str(p.with_suffix(""))
-            ext = p.suffix
-            hashed_path = next(
-                (path for path in www if path.startswith(base) and path.endswith(ext)),
-                None,
-            )
-            if hashed_path:
-                www["/favicon.ico"] = www[hashed_path]
+            if m := fnmatch.filter(www, self.favicon):
+                data, zstd, headers = www[m[0]]
+                if "immutable" in headers.get("cache-control", ""):
+                    headers = {**headers, "cache-control": "max-age=86400"}
+                www["/favicon.ico"] = data, zstd, headers
         if not www:
             msg = "Frontend files missing, check your installation.\n"
             www["/"] = (
@@ -193,6 +190,8 @@ class Frontend:
                 f"{self.base.name}: {len(self.www)} files in {1000 * duration:.1f} ms | "
                 f"zstd {len(compfiles)} files {1e-6 * raw:.2f}->{1e-6 * comp:.2f} MB ({ratio:.0f} %)"
             )
+        if self.favicon and "/favicon.ico" not in self.www:
+            logger.warning("Favicon not found: %s", self.favicon)
 
     def route(self, app: FastAPI, mount_path="/"):
         """Register frontend routes with a FastAPI app.
