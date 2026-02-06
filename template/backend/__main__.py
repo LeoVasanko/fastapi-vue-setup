@@ -1,9 +1,11 @@
 # auto-upgrade@fastapi-vue-setup - remove this if you modify this file
 import argparse
+import os
 
 from fastapi_vue import server
 
 DEFAULT_PORT = TEMPLATE_DEFAULT_PORT
+DEVMODE = bool(os.getenv("ENVPREFIX_FRONTEND_URL"))
 
 
 def main():
@@ -19,6 +21,7 @@ def main():
         "MODULE_NAME.APP_MODULE:APP_VAR",
         listen=args.listen,
         default_port=DEFAULT_PORT,
+        reload=DEVMODE,
     )
 
 

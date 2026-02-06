@@ -9,6 +9,7 @@ description = "Tool to create or patch FastAPI+Vue projects with integrated buil
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "ruff>=0.14.13",
     "tomlkit>=0.12.0",
 ]
 
@@ -26,4 +27,7 @@ source = "vcs"
 include = ["fastapi_vue_setup.py", "template/**/*", "_version.py"]
 
 [dependency-groups]
-dev = ["ruff"]
+dev = ["ruff", "fastapi-vue"]
+
+[tool.uv.sources]
+fastapi-vue = { path = "fastapi-vue", editable = true }

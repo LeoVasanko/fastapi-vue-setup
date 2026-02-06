@@ -3,9 +3,10 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi_vue import Frontend
+from MODULE_NAME.__main__ import DEVMODE
 
 # Vue Frontend static files
-frontend = Frontend(Path(__file__).with_name("frontend-build"), cached=["/assets/"])
+frontend = Frontend(Path(__file__).with_name("frontend-build"))
 
 
 @asynccontextmanager
@@ -15,7 +16,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="PROJECT_TITLE", lifespan=lifespan)
+app = FastAPI(title="PROJECT_TITLE", debug=DEVMODE, lifespan=lifespan)
 
 
 # Add API routes here...

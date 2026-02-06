@@ -1,17 +1,18 @@
 /**
  * FastAPI-Vue Vite Plugin
+ * auto-upgrade@fastapi-vue-setup -- remove this if you edit the plugin
  *
  * Configures Vite for FastAPI backend integration:
  * - Proxies /api/* requests to the FastAPI backend
  * - Builds to the Python module's frontend-build directory
  *
- * Environment variables (with defaults):
- *   FASTAPI_VUE_BACKEND_URL=http://localhost:5180 - Backend API URL for proxying
+ * Options:
+ *   paths - Array of paths to proxy (default: ["/api"])
  */
 
-const backendUrl = process.env.FASTAPI_VUE_BACKEND_URL || "http://localhost:5180"
-
 export default function fastapiVue({ paths = ["/api"] } = {}) {
+  const backendUrl = process.env.ENVPREFIX_BACKEND_URL || "http://localhost:TEMPLATE_DEFAULT_PORT"
+
   // Build proxy configuration for each path
   const proxy = {}
   for (const path of paths) {
@@ -23,7 +24,7 @@ export default function fastapiVue({ paths = ["/api"] } = {}) {
   }
 
   return {
-    name: "fastapi-vite",
+    name: "vite-plugin-fastapi-MODULE_NAME",
     config: () => ({
       server: { proxy },
       build: {

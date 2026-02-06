@@ -188,3 +188,29 @@ def setup_fastapi(
         "--forwarded-allow-ips=*",
     ]
     return f"http://{host}:{port}", cmd
+
+
+def setup_cli(
+    cli: str, endpoint: str, default_port: int = 8000
+) -> tuple[str, list[str]]:
+    """Parse backend endpoint and build CLI command.
+
+    Returns (url, cli_cmd).
+    Raises SystemExit(1) on invalid config.
+    """
+    endpoints = parse_endpoint(endpoint, default_port)
+
+    if "uds" in endpoints[0]:
+        logger.warning("Unix sockets not supported with vite devserver")
+        raise SystemExit(1)
+
+    host = endpoints[0]["host"]
+    port = endpoints[0]["port"]
+
+    cmd = [
+        sys.executable,
+        "-m",
+        cli,
+        f"--listen={host}:{port}",
+    ]
+    return f"http://{host}:{port}", cmd
