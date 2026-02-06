@@ -12,6 +12,7 @@ Options:
 """
 
 import argparse
+import ast
 import os
 import re
 import shutil
@@ -22,8 +23,48 @@ from textwrap import indent
 
 import tomlkit
 
+# Track Python files written/patched for ruff formatting
+_python_files_to_format: list[Path] = []
+
 # Template directory
 TEMPLATE_DIR = Path(__file__).parent / "template"
+
+
+def ruff_sort_imports(files: list[Path], dry_run: bool = False) -> None:
+    """Run ruff to sort imports in the given Python files."""
+    if not files:
+        return
+    py_files = [str(f) for f in files if f.suffix == ".py" and f.exists()]
+    if not py_files:
+        return
+    if dry_run:
+        print(f"[DRY RUN] Would run ruff import sorting on {len(py_files)} files")
+        return
+    print("🔧 Ruff isort on modified files")
+    subprocess.run(
+        ["ruff", "check", "--select", "I", "--fix", *py_files],
+        stdout=subprocess.DEVNULL,
+    )
+
+
+def uv_add_packages(
+    packages: list[str], *, cwd: Path, group: str | None = None, dry_run: bool = False
+) -> None:
+    """Add packages using uv."""
+    cmd = ["uv", "add", "-q", "-U"]
+    if group:
+        cmd.extend(["--group", group])
+    else:
+        cmd.append("--no-sync")
+    cmd.extend(packages)
+    if dry_run:
+        print(f"[DRY RUN] Would run: {' '.join(cmd)}")
+        return
+    result = subprocess.run(cmd, cwd=cwd, check=False)
+    if result.returncode != 0:
+        label = f" ({group})" if group else ""
+        print(f"⚠️  Failed to add{label} dependencies")
+
 
 # Default ports: (default, vite, dev)
 # If vite == dev, dev is incremented by 100
@@ -151,6 +192,24 @@ def parse_ports(ports_str: str | None) -> tuple[int, int, int]:
         dev = vite + 100
 
     return default, vite, dev
+
+
+def find_import_insertion_line(source: str) -> int:
+    """Find line number (1-based) for inserting imports, after shebang/docstring."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return 2 if source.startswith("#!") else 1
+    # Find first import, or end of docstring if no imports
+    for node in tree.body:
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            return node.lineno
+        if not (isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant)):
+            break  # Non-import, non-docstring statement
+    # No imports found - insert after docstring or at line 1
+    if tree.body and isinstance(tree.body[0], ast.Expr):
+        return tree.body[0].end_lineno + 1
+    return 2 if source.startswith("#!") else 1
 
 
 def extract_existing_ports(project_dir: Path) -> tuple[int, int, int] | None:
@@ -421,7 +480,7 @@ def patch_app_file(
 ) -> bool:
     """Patch an existing app.py with frontend integration.
 
-    Inserts import and Frontend instantiation after imports, route at bottom,
+    Inserts imports at top (ruff will sort them), route at bottom,
     and tries to patch lifespan with frontend.load().
 
     Returns True if patched, False if already patched or failed.
@@ -431,62 +490,94 @@ def patch_app_file(
         return False
 
     original_content = path.read_text("UTF-8")
-    marker = "from fastapi_vue import Frontend"
+    content = original_content
 
-    if marker in original_content:
+    # Check what's already patched
+    has_frontend = "from fastapi_vue import Frontend" in content
+    has_devmode = f"from {module_name}.__main__ import DEVMODE" in content
+    has_debug_arg = re.search(r"FastAPI\s*\([^)]*debug\s*=", content) is not None
+
+    if has_frontend and has_devmode and has_debug_arg:
         print(f"✔️  {path} (already patched)")
         return False
 
-    # Find where to insert the import (after other imports)
-    lines = original_content.split("\n")
-    import_line = "from fastapi_vue import Frontend"
-
     route_line = f'frontend.route({app_var}, "/")'
 
-    # Find last import line and check if pathlib is imported
-    last_import_idx = 0
-    has_pathlib = False
-    for i, line in enumerate(lines):
-        stripped = line.strip()
-        if stripped.startswith("import ") or stripped.startswith("from "):
-            last_import_idx = i
-            if "pathlib" in stripped or "from pathlib" in stripped:
-                has_pathlib = True
-        elif stripped and not stripped.startswith("#") and last_import_idx > 0:
-            # Stop at first non-import, non-comment, non-empty line after imports
-            break
+    # Add missing imports (using AST to find correct insertion point)
+    imports = []
+    if not has_frontend:
+        imports.extend(["from pathlib import Path", "from fastapi_vue import Frontend"])
+    if not has_devmode:
+        imports.append(f"from {module_name}.__main__ import DEVMODE")
+    if imports:
+        insert_line = find_import_insertion_line(content)
+        lines = content.splitlines(keepends=True)
+        # Convert to 0-based index
+        insert_idx = insert_line - 1
+        import_text = "\n".join(imports) + "\n"
+        if insert_idx >= len(lines):
+            # Append at end
+            content = content.rstrip("\n") + "\n" + import_text
+        else:
+            # Insert at the found position
+            content = (
+                "".join(lines[:insert_idx]) + import_text + "".join(lines[insert_idx:])
+            )
 
-    # Check if we found imports to insert after
-    if last_import_idx == 0 and not lines[0].strip().startswith(("import ", "from ")):
-        print(f"⚠️  Skipping {path} (no imports found to patch)")
-        return False
+    # Insert FRONTEND_BLOCK after last import (only if Frontend wasn't already there)
+    if not has_frontend:
+        lines = content.split("\n")
+        last_import_idx = 0
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            if stripped.startswith("import ") or stripped.startswith("from "):
+                last_import_idx = i
+            elif stripped and not stripped.startswith("#") and last_import_idx > 0:
+                break
+        lines.insert(last_import_idx + 1, FRONTEND_BLOCK)
 
-    # Insert imports after last import, then frontend instantiation
-    if not has_pathlib:
-        lines.insert(last_import_idx + 1, "from pathlib import Path")
-        last_import_idx += 1
-    lines.insert(last_import_idx + 1, import_line)
-    lines.insert(last_import_idx + 2, FRONTEND_BLOCK)
+        # Append route at end
+        lines.append("")
+        lines.append(
+            "# Serve the Vue frontend (needs to be last if SPA catch-all is used)"
+        )
+        lines.append(route_line)
+        content = "\n".join(lines)
 
-    # Append route at end
-    lines.append("")
-    lines.append("# Serve the Vue frontend (needs to be last if SPA catch-all is used)")
-    lines.append(route_line)
-    content = "\n".join(lines)
+    # Try to patch FastAPI() call with debug=DEVMODE if no debug arg exists
+    if not has_debug_arg:
+        fastapi_pattern = r"(\w+\s*=\s*FastAPI\s*\()([^)]*)\)"
+        for match in re.finditer(fastapi_pattern, content, re.DOTALL):
+            args = match.group(2)
+            if "debug" not in args:
+                # Add debug=DEVMODE as first argument
+                if args.strip():
+                    new_args = f"debug=DEVMODE, {args}"
+                else:
+                    new_args = "debug=DEVMODE"
+                content = (
+                    content[: match.start()]
+                    + match.group(1)
+                    + new_args
+                    + ")"
+                    + content[match.end() :]
+                )
+                break  # Only patch first FastAPI() call
 
     # Try to patch lifespan function - insert await frontend.load() before yield
-    lifespan_patched = False
+    lifespan_patched = "await frontend.load()" in content
 
     # Look for yield inside an async def lifespan function
     # Find the yield statement and insert before it
-    yield_pattern = r"^([ \t]+)(yield\b)"
-    yield_match = re.search(yield_pattern, content, re.MULTILINE)
-    if yield_match:
-        indent = yield_match.group(1)
-        insert_pos = yield_match.start()
-        load_code = f"{indent}await frontend.load()\n"
-        content = content[:insert_pos] + load_code + content[insert_pos:]
-        lifespan_patched = True
+    if not lifespan_patched:
+        yield_pattern = r"^([ \t]+)(yield\b)"
+        yield_match = re.search(yield_pattern, content, re.MULTILINE)
+        if yield_match:
+            ws = yield_match.group(1)
+            insert_pos = yield_match.start()
+            load_code = f"{ws}await frontend.load()\n"
+            content = content[:insert_pos] + load_code + content[insert_pos:]
+            lifespan_patched = True
 
     # Check if content actually changed
     if content == original_content:
@@ -498,6 +589,7 @@ def patch_app_file(
         return True
 
     path.write_text(content, "UTF-8", newline="\n")
+    _python_files_to_format.append(path)
     print(f"✅ Patched {path}")
 
     if not lifespan_patched:
@@ -743,6 +835,8 @@ def write_file(
     path.write_text(content, "UTF-8", newline="\n")
     if executable and sys.platform != "win32":
         path.chmod(path.stat().st_mode | 0o111)
+    if path.suffix == ".py":
+        _python_files_to_format.append(path)
     action = "Updated" if exists else "Created"
     print(f"✅ {action} {path}")
     return True
@@ -771,6 +865,8 @@ def _write_fallback_file(
     fallback_path.write_text(content, "UTF-8", newline="\n")
     if executable and sys.platform != "win32":
         fallback_path.chmod(fallback_path.stat().st_mode | 0o111)
+    if fallback_path.suffix == ".py":
+        _python_files_to_format.append(fallback_path)
     print(f"✅ Created {fallback_path} (original customized by user)")
     _new_files_written.append((fallback_path, original_path))
     return True
@@ -1047,6 +1143,8 @@ def cmd_setup(args: argparse.Namespace) -> int:
         "TEMPLATE_DEFAULT_PORT": str(default_port),
         "TEMPLATE_VITE_PORT": str(vite_port),
         "TEMPLATE_DEV_PORT": str(dev_port),
+        "ENVPREFIX": module_name.upper(),
+        "PROJECT_CLI": module_name,
     }
 
     module_dir = project_dir / module_name
@@ -1239,27 +1337,13 @@ def cmd_setup(args: argparse.Namespace) -> int:
         print("✅ Created .gitignore")
 
     # === Add dependencies using uv ===
-    uv_add_main = [
-        "uv",
-        "add",
-        "-q",
-        "-U",
-        "--no-sync",
-        "fastapi[standard]",
-        "fastapi-vue",
-    ]
-    uv_add_dev = ["uv", "add", "-q", "-U", "--group", "dev", "httpx"]
-    if dry_run:
-        print(f"[DRY RUN] Would run: {' '.join(uv_add_main)}")
-        print(f"[DRY RUN] Would run: {' '.join(uv_add_dev)}")
-    else:
-        print("📦 Adding dependencies...")
-        result = subprocess.run(uv_add_main, cwd=project_dir, check=False)
-        if result.returncode != 0:
-            print("⚠️  Failed to add main dependencies")
-        result = subprocess.run(uv_add_dev, cwd=project_dir, check=False)
-        if result.returncode != 0:
-            print("⚠️  Failed to add dev dependencies")
+    ruff_sort_imports(_python_files_to_format, dry_run=dry_run)
+    if not dry_run:
+        print("📦 Dependencies")
+    uv_add_packages(
+        ["fastapi[standard]", "fastapi-vue"], cwd=project_dir, dry_run=dry_run
+    )
+    uv_add_packages(["httpx"], cwd=project_dir, group="dev", dry_run=dry_run)
 
     print()
     print("=" * 60)
