@@ -48,7 +48,7 @@ def ruff_sort_imports(files: list[Path], dry_run: bool = False) -> None:
 
 
 def uv_add_packages(
-    packages: list[str], *, cwd: Path, group: str | None = None, dry_run: bool = False
+    packages: list[str], *, cwd: Path, group: str | None = None
 ) -> None:
     """Add packages using uv."""
     cmd = ["uv", "add", "-q", "-U"]
@@ -57,9 +57,6 @@ def uv_add_packages(
     else:
         cmd.append("--no-sync")
     cmd.extend(packages)
-    if dry_run:
-        print(f"[DRY RUN] Would run: {' '.join(cmd)}")
-        return
     result = subprocess.run(cmd, cwd=cwd, check=False)
     if result.returncode != 0:
         label = f" ({group})" if group else ""
@@ -1338,12 +1335,12 @@ def cmd_setup(args: argparse.Namespace) -> int:
 
     # === Add dependencies using uv ===
     ruff_sort_imports(_python_files_to_format, dry_run=dry_run)
-    if not dry_run:
+    if dry_run:
+        print("[DRY RUN] Would add: fastapi[standard], fastapi-vue, httpx (dev only)")
+    else:
         print("📦 Dependencies")
-    uv_add_packages(
-        ["fastapi[standard]", "fastapi-vue"], cwd=project_dir, dry_run=dry_run
-    )
-    uv_add_packages(["httpx"], cwd=project_dir, group="dev", dry_run=dry_run)
+        uv_add_packages(["fastapi[standard]", "fastapi-vue"], cwd=project_dir)
+        uv_add_packages(["httpx"], cwd=project_dir, group="dev")
 
     print()
     print("=" * 60)
