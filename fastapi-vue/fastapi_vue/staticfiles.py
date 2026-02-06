@@ -1,8 +1,9 @@
 """FastAPI static file serving with zstd compression and SPA support."""
 
+from __future__ import annotations
+
 import logging
 import mimetypes
-import os
 import time
 from base64 import urlsafe_b64encode
 from functools import partial
@@ -17,10 +18,25 @@ from starlette.exceptions import HTTPException
 from starlette.routing import Route
 from zstandard import ZstdCompressor
 
-# Dev mode: index files but don't load content, return error responses
-_DEVMODE = os.getenv("FASTAPI_VUE_FRONTEND_URL")
-
 logger = logging.getLogger("uvicorn.error")  # Use FastAPI logging style
+
+__all__ = ["Frontend"]
+
+
+class Assets:
+    """Default cached value to /assets/"""
+
+    @staticmethod
+    def parse(cached: str | list[str] | Assets) -> list[str]:
+        match cached:
+            case Assets():
+                return ["/assets/"]
+            case str():
+                return [cached]
+            case list():
+                return cached
+            case _:
+                raise ValueError(f"Invalid cached value: {cached!r}")
 
 
 class Frontend:
@@ -37,9 +53,9 @@ class Frontend:
         directory: Path to the directory containing static files
         index: Name of the index file (default: "index.html")
         spa: Enable SPA mode - serve index.html for unknown routes (default: False)
-        cached: Path prefixes that should have immutable cache headers
+        cached: Path prefixes that are immutable (default: "/assets/")
+        favicon: E.g. /assets/logo.png will serve /assets/logo*.png as /favicon.ico
         zstdlevel: Zstd compression level (default: 18)
-        favicon: Path to favicon for automatic /favicon.ico handling
     """
 
     def __init__(
@@ -49,24 +65,18 @@ class Frontend:
         index: str = "index.html",
         spa: bool = False,
         catch_all: bool | None = None,
-        cached: str | list[str] | None = None,
-        zstdlevel: int = 18,
+        cached: str | list[str] | Assets = Assets(),
         favicon: str | None = None,
+        zstdlevel: int = 18,
     ) -> None:
         self.www: dict[str, tuple[bytes, bytes | None, dict]] = {}
         self.base: Path = Path(directory)
         self.index = index
         self.spa = spa
         self._catch_all = spa if catch_all is None else catch_all
-        if cached is None:
-            self.cached_paths = []
-        elif isinstance(cached, str):
-            self.cached_paths = [cached]
-        else:
-            self.cached_paths = cached
+        self.cached_paths = Assets.parse(cached)
         self.zstdlevel = zstdlevel
         self.favicon = favicon
-        self.devmode = bool(_DEVMODE)
         self._app: FastAPI | None = None
         self._mount_path: str = ""
         self._ridx: int = 0
@@ -154,12 +164,15 @@ class Frontend:
             )
         return www
 
-    async def load(self, *, log=True):
+    async def load(self, *, debug: bool | None = None, log: bool = True):
         """Load or reload static files from disk.
 
-        In dev mode (FASTAPI_VUE_FRONTEND_URL set), only indexes paths without loading content.
+        In debug mode, returns 409 instead of files (avoid accidental use of stale builds)
+        If debug is None, uses app.debug (app passed to frontend.route)
         """
-        if self.devmode:
+        if debug is None:
+            debug = getattr(self._app, "debug", False)
+        if debug:
             # Dev mode: just index paths, no content loading
             self._devmode_paths = await run_in_threadpool(self._index_only)
             self._register_routes()
@@ -214,13 +227,14 @@ class Frontend:
         self._routes.clear()
 
         # Get paths and select handler based on mode (checked once, not per request)
-        paths = self._devmode_paths if self.devmode else self.www.keys()
-        handler = _devmode_respond if self.devmode else self._respond
+        debug = getattr(self._app, "debug", False)
+        paths = self._devmode_paths if debug else self.www.keys()
+        handler = _devmode_respond if debug else self._respond
         # Insert at the position where route() was called
         self._app.routes[self._ridx : self._ridx] = self._routes = [
             Route(
                 self._mount_path + p,
-                endpoint=handler if self.devmode else partial(handler, name=p),
+                endpoint=handler if debug else partial(handler, name=p),
                 methods=["GET", "HEAD"],
                 name=f"frontend{p.replace('/', '_')}",
             )
@@ -241,7 +255,8 @@ class Frontend:
     def handle(self, request: Request, path: str):
         """SPA catch-all handler with directory redirects and fallback to index."""
         name = path.removesuffix(self.index)
-        files = self._devmode_paths if self.devmode else self.www
+        debug = getattr(self._app, "debug", False)
+        files = self._devmode_paths if debug else self.www
 
         if name not in files:
             # Friendly redirect for directories missing trailing slash
@@ -254,7 +269,7 @@ class Frontend:
             if name not in files:
                 raise HTTPException(status_code=404)
 
-        return (_devmode_respond if self.devmode else self._respond)(request, name)
+        return (_devmode_respond if debug else self._respond)(request, name)
 
 
 def _devmode_respond(request: Request, name=""):
@@ -262,6 +277,6 @@ def _devmode_respond(request: Request, name=""):
     return JSONResponse(
         status_code=409,
         content={
-            "detail": f"Frontend assets served by Vite in dev mode. Connect via {_DEVMODE} instead."
+            "detail": "Frontend assets served by Vite in debug mode. You are on backend, connect to frontend instead."
         },
     )
