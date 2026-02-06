@@ -842,7 +842,9 @@ def patch_frontend_health_check(frontend_dir: Path, dry_run: bool = False) -> bo
 
 # SHA-256 of old vite-plugin-fastapi.js (before auto-upgrade marker was added)
 # with module name replaced by MODULE_NAME in the outDir path
-_OLD_VITE_PLUGIN_SHA256 = "93713e879c15a25c750a70ce1de684adeaf11b0c723c38da56e5e7ba207f6632"
+_OLD_VITE_PLUGIN_SHA256 = (
+    "93713e879c15a25c750a70ce1de684adeaf11b0c723c38da56e5e7ba207f6632"
+)
 
 
 def _upgrade_old_vite_plugin(
@@ -861,7 +863,9 @@ def _upgrade_old_vite_plugin(
         return  # Already new format, write_file handles it
     import hashlib
 
-    normalized = content.replace(f"../{module_name}/frontend-build", "../MODULE_NAME/frontend-build")
+    normalized = content.replace(
+        f"../{module_name}/frontend-build", "../MODULE_NAME/frontend-build"
+    )
     digest = hashlib.sha256(normalized.encode()).hexdigest()
     if digest != _OLD_VITE_PLUGIN_SHA256:
         return  # Modified by user, don't touch
