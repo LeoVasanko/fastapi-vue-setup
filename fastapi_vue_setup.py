@@ -95,7 +95,16 @@ PYPROJECT_ADDITIONS = {
 # Frontend instantiation block for patching existing apps
 FRONTEND_BLOCK = """
 # Vue Frontend static files
-frontend = Frontend(Path(__file__).with_name("frontend-build"), cached=["/assets/"])
+frontend = Frontend(Path(__file__).with_name("frontend-build"))
+"""
+
+# Lifespan block for patching apps that don't have one
+LIFESPAN_BLOCK = """
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    \"\"\"Manage app startup and shutdown resources.\"\"\"
+    await frontend.load()
+    yield
 """
 
 # TypeScript health check script for Vue components
@@ -493,8 +502,9 @@ def patch_app_file(
     has_frontend = "from fastapi_vue import Frontend" in content
     has_devmode = f"from {module_name}.__main__ import DEVMODE" in content
     has_debug_arg = re.search(r"FastAPI\s*\([^)]*debug\s*=", content) is not None
+    has_lifespan = "await frontend.load()" in content
 
-    if has_frontend and has_devmode and has_debug_arg:
+    if has_frontend and has_devmode and has_debug_arg and has_lifespan:
         print(f"✔️  {path} (already patched)")
         return False
 
@@ -532,8 +542,11 @@ def patch_app_file(
             elif stripped and not stripped.startswith("#") and last_import_idx > 0:
                 break
         lines.insert(last_import_idx + 1, FRONTEND_BLOCK)
+        content = "\n".join(lines)
 
-        # Append route at end
+    # Append route at end (only if not already present)
+    if route_line not in content:
+        lines = content.split("\n")
         lines.append("")
         lines.append(
             "# Serve the Vue frontend (needs to be last if SPA catch-all is used)"
@@ -547,9 +560,9 @@ def patch_app_file(
         for match in re.finditer(fastapi_pattern, content, re.DOTALL):
             args = match.group(2)
             if "debug" not in args:
-                # Add debug=DEVMODE as first argument
+                # Add debug=DEVMODE as last argument
                 if args.strip():
-                    new_args = f"debug=DEVMODE, {args}"
+                    new_args = f"{args}, debug=DEVMODE"
                 else:
                     new_args = "debug=DEVMODE"
                 content = (
@@ -575,6 +588,52 @@ def patch_app_file(
             load_code = f"{ws}await frontend.load()\n"
             content = content[:insert_pos] + load_code + content[insert_pos:]
             lifespan_patched = True
+
+    # No lifespan at all: create one and wire it into FastAPI()
+    if not lifespan_patched and f"@{app_var}.on_event" not in content:
+        # Add contextlib import
+        if "from contextlib import asynccontextmanager" not in content:
+            insert_line = find_import_insertion_line(content)
+            lines = content.splitlines(keepends=True)
+            insert_idx = insert_line - 1
+            import_text = "from contextlib import asynccontextmanager\n"
+            if insert_idx >= len(lines):
+                content = content.rstrip("\n") + "\n" + import_text
+            else:
+                content = (
+                    "".join(lines[:insert_idx])
+                    + import_text
+                    + "".join(lines[insert_idx:])
+                )
+
+        # Insert lifespan block before the FastAPI() call
+        fastapi_line_pattern = r"^(\w+\s*=\s*FastAPI\s*\()"
+        fastapi_match = re.search(fastapi_line_pattern, content, re.MULTILINE)
+        if fastapi_match:
+            content = (
+                content[: fastapi_match.start()]
+                + LIFESPAN_BLOCK.lstrip("\n")
+                + "\n"
+                + content[fastapi_match.start() :]
+            )
+
+        # Add lifespan=lifespan to FastAPI() call
+        fastapi_pattern = r"(\w+\s*=\s*FastAPI\s*\()([^)]*)\)"
+        fastapi_match = re.search(fastapi_pattern, content, re.DOTALL)
+        if fastapi_match and "lifespan" not in fastapi_match.group(2):
+            args = fastapi_match.group(2)
+            if args.strip():
+                new_args = f"{args}, lifespan=lifespan"
+            else:
+                new_args = "lifespan=lifespan"
+            content = (
+                content[: fastapi_match.start()]
+                + fastapi_match.group(1)
+                + new_args
+                + ")"
+                + content[fastapi_match.end() :]
+            )
+        lifespan_patched = True
 
     # Check if content actually changed
     if content == original_content:
@@ -779,6 +838,38 @@ def patch_frontend_health_check(frontend_dir: Path, dry_run: bool = False) -> bo
     target_file.write_text(content, "UTF-8", newline="\n")
     print(f"✅ Patched {target_file}")
     return True
+
+
+# SHA-256 of old vite-plugin-fastapi.js (before auto-upgrade marker was added)
+# with module name replaced by MODULE_NAME in the outDir path
+_OLD_VITE_PLUGIN_SHA256 = "93713e879c15a25c750a70ce1de684adeaf11b0c723c38da56e5e7ba207f6632"
+
+
+def _upgrade_old_vite_plugin(
+    path: Path, module_name: str, dry_run: bool = False
+) -> None:
+    """Remove old vite-plugin-fastapi.js that lacks auto-upgrade marker.
+
+    Old versions didn't have the upgrade marker, so write_file skips them as
+    'customized by user'. We recognize the old version by normalizing the module
+    name in outDir and comparing the SHA-256 hash.
+    """
+    if not path.exists():
+        return
+    content = path.read_text("UTF-8")
+    if UPGRADE_MARKER in content:
+        return  # Already new format, write_file handles it
+    import hashlib
+
+    normalized = content.replace(f"../{module_name}/frontend-build", "../MODULE_NAME/frontend-build")
+    digest = hashlib.sha256(normalized.encode()).hexdigest()
+    if digest != _OLD_VITE_PLUGIN_SHA256:
+        return  # Modified by user, don't touch
+    if dry_run:
+        print(f"🔄 Would upgrade old {path}")
+        return
+    path.unlink()
+    print(f"🔄 Removing old {path} (will be replaced)")
 
 
 # Track .new.py files written during setup (for merge notification)
@@ -1267,6 +1358,8 @@ def cmd_setup(args: argparse.Namespace) -> int:
     if frontend_dir.exists():
         # Install the vite plugin file (always update)
         plugin_file = frontend_dir / "vite-plugin-fastapi.js"
+        # Upgrade old plugin versions that lack the auto-upgrade marker
+        _upgrade_old_vite_plugin(plugin_file, module_name, dry_run)
         template = load_template("frontend/vite-plugin-fastapi.js")
         content = render_template(template, **tpl_vars)
         write_file(plugin_file, content, overwrite=True, dry_run=dry_run)
