@@ -42,7 +42,7 @@ def ruff_sort_imports(files: list[Path], dry_run: bool = False) -> None:
         return
     print("🔧 Ruff isort on modified files")
     subprocess.run(
-        ["ruff", "check", "--select", "I", "--fix", *py_files],
+        [sys.executable, "-m", "ruff", "check", "--select", "I", "--fix", *py_files],
         stdout=subprocess.DEVNULL,
     )
 
