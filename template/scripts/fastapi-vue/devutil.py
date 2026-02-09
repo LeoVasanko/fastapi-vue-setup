@@ -207,10 +207,5 @@ def setup_cli(
     host = endpoints[0]["host"]
     port = endpoints[0]["port"]
 
-    cmd = [
-        sys.executable,
-        "-m",
-        cli,
-        f"--listen={host}:{port}",
-    ]
+    cmd = [cli, f"--listen={host}:{port}"]
     return f"http://{host}:{port}", cmd
