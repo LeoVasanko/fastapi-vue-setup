@@ -276,6 +276,6 @@ def _devmode_respond(request: Request, name=""):
     return JSONResponse(
         status_code=409,
         content={
-            "detail": "Frontend assets served by Vite in debug mode. You are on backend, connect to frontend instead."
+            "detail": "[devmode] Not serving frontend files here. Should you connect to Vite instead?"
         },
     )
