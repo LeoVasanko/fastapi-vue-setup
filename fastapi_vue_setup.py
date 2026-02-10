@@ -1186,6 +1186,8 @@ def cmd_setup(args: argparse.Namespace) -> int:
     dry = args.dry
 
     print_boxed(f"fastapi-vue-setup {version}")
+    if dry:
+        print("🏃 DRY RUN MODE - no changes will be made\n")
 
     # Create project directory if it doesn't exist
     if not project_dir.exists():
@@ -1196,9 +1198,6 @@ def cmd_setup(args: argparse.Namespace) -> int:
             print(f"✅ Created {project_dir}")
 
     print(f"🔧 Setting up project: {project_dir}")
-
-    if dry:
-        print("\n🏃 DRY RUN MODE - no changes will be made\n")
 
     # Step 1: Ensure frontend exists (do this first so cancellation doesn't leave partial setup)
     if not ensure_frontend(project_dir, dry):
@@ -1522,7 +1521,9 @@ Examples:
         metavar="BACKEND,VITE,DEV",
         help="Port configuration as comma-separated values (default: 3100,3100,3200)",
     )
-    parser.add_argument("--dry", action="store_true", help="Show what would be done")
+    parser.add_argument(
+        "--dry", "--dry-run", action="store_true", help="Show what would be done"
+    )
 
     args = parser.parse_args()
 
