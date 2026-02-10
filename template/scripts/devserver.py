@@ -1,6 +1,6 @@
 #!/usr/bin/env -S uv run
 # auto-upgrade@fastapi-vue-setup - remove this if you modify this file
-"""Run Vite development server for frontend and FastAPI backend with auto-reload."""
+"""Run Vite development server for Vue app and FastAPI backend with auto-reload."""
 
 import argparse
 import asyncio
@@ -25,7 +25,7 @@ DEFAULT_DEV_PORT = TEMPLATE_DEV_PORT
 
 
 async def run_devserver(
-    frontend: str, backend: str, extra_args: list[str] | None = None
+    listen: str, backend: str, extra_args: list[str] | None = None
 ) -> None:
     reporoot = Path(__file__).parent.parent
     front = reporoot / "frontend"
@@ -33,12 +33,13 @@ async def run_devserver(
         logger.warning("Frontend source not found at %s", front)
         raise SystemExit(1)
 
-    viteurl, npm_install, vite = setup_vite(frontend, DEFAULT_VITE_PORT)
+    viteurl, npm_install, vite = setup_vite(listen, DEFAULT_VITE_PORT)
     backurl, MODULE_NAME = setup_cli("PROJECT_CLI", backend, DEFAULT_DEV_PORT)
 
-    # Tell the everyone where the frontend and backend are (vite proxy, etc)
-    os.environ["ENVPREFIX_FRONTEND_URL"] = viteurl
+    # Tell the everyone by environment (vite proxy and backend devmode use these)
+    os.environ["ENVPREFIX_VITE_URL"] = viteurl
     os.environ["ENVPREFIX_BACKEND_URL"] = backurl
+    os.environ["ENVPREFIX_DEV"] = "1"
 
     async with ProcessGroup() as pg:
         npm_i = await pg.spawn(*npm_install, cwd=front)
@@ -55,19 +56,18 @@ def main():
         epilog=HELP_EPILOG,
     )
     parser.add_argument(
-        "frontend",
-        nargs="?",
+        "-l", "--listen",
         metavar="host:port",
-        help=f"Vite frontend endpoint (default: localhost:{DEFAULT_VITE_PORT})",
+        help=f"Vite (default: localhost:{DEFAULT_VITE_PORT})",
     )
     parser.add_argument(
         "--backend",
         metavar="host:port",
-        help=f"FastAPI backend endpoint (default: localhost:{DEFAULT_DEV_PORT})",
+        help=f"FastAPI (default: localhost:{DEFAULT_DEV_PORT})",
     )
     args, extra_args = parser.parse_known_args()
     with suppress(KeyboardInterrupt):
-        asyncio.run(run_devserver(args.frontend, args.backend, extra_args))
+        asyncio.run(run_devserver(args.listen, args.backend, extra_args))
 
 
 HELP_EPILOG = """
