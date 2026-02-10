@@ -8,11 +8,12 @@ Usage:
 Options:
     --module-name NAME      Python module name (auto-detected from pyproject.toml)
     --ports DEFAULT,VITE,DEV  Port configuration (default: 3100,3100,3200)
-    --dry-run               Show what would be done without making changes
+    --dry                   Show what would be done without making changes
 """
 
 import argparse
 import ast
+import importlib.metadata
 import os
 import re
 import shutil
@@ -23,6 +24,8 @@ from textwrap import indent
 
 import tomlkit
 
+version = importlib.metadata.version("fastapi-vue-setup")
+
 # Track Python files written/patched for ruff formatting
 _python_files_to_format: list[Path] = []
 
@@ -30,14 +33,14 @@ _python_files_to_format: list[Path] = []
 TEMPLATE_DIR = Path(__file__).parent / "template"
 
 
-def ruff_sort_imports(files: list[Path], dry_run: bool = False) -> None:
+def ruff_sort_imports(files: list[Path], dry: bool = False) -> None:
     """Run ruff to sort imports in the given Python files."""
     if not files:
         return
     py_files = [str(f) for f in files if f.suffix == ".py" and f.exists()]
     if not py_files:
         return
-    if dry_run:
+    if dry:
         print(f"🔧 Would run ruff import sorting on {len(py_files)} files")
         return
     print("🔧 Ruff isort on modified files")
@@ -482,7 +485,7 @@ def render_template(template: str, **kwargs) -> str:
 
 
 def patch_app_file(
-    path: Path, module_name: str, app_var: str, dry_run: bool = False
+    path: Path, module_name: str, app_var: str, dry: bool = False
 ) -> bool:
     """Patch an existing app.py with frontend integration.
 
@@ -640,7 +643,7 @@ def patch_app_file(
         print(f"⚠️  Skipping {path} (no changes needed)")
         return False
 
-    if dry_run:
+    if dry:
         print(f"✅ Would patch {path}")
         return True
 
@@ -669,7 +672,7 @@ def patch_app_file(
 def patch_vite_config(
     path: Path,
     module_name: str,
-    dry_run: bool = False,
+    dry: bool = False,
 ) -> bool:
     """Patch an existing vite.config.js/ts by adding fastapi-vue plugin.
 
@@ -731,7 +734,7 @@ def patch_vite_config(
         print(f"ℹ️  Skipping {path} (no changes needed)")
         return False
 
-    if dry_run:
+    if dry:
         print(f"✅ Would patch {path}")
         return True
 
@@ -740,7 +743,7 @@ def patch_vite_config(
     return True
 
 
-def patch_frontend_health_check(frontend_dir: Path, dry_run: bool = False) -> bool:
+def patch_frontend_health_check(frontend_dir: Path, dry: bool = False) -> bool:
     """Patch Vue app to include FastAPI backend health check.
 
     Tries HelloWorld.vue first (full demo), then falls back to App.vue (minimal).
@@ -831,7 +834,7 @@ def patch_frontend_health_check(frontend_dir: Path, dry_run: bool = False) -> bo
         print(f"ℹ️  Skipping {target_file} (no changes needed)")
         return False
 
-    if dry_run:
+    if dry:
         print(f"✅ Would patch {target_file}")
         return True
 
@@ -848,7 +851,7 @@ _OLD_VITE_PLUGIN_SHA256 = (
 
 
 def _upgrade_old_vite_plugin(
-    path: Path, module_name: str, dry_run: bool = False
+    path: Path, module_name: str, dry: bool = False
 ) -> None:
     """Remove old vite-plugin-fastapi.js that lacks auto-upgrade marker.
 
@@ -869,7 +872,7 @@ def _upgrade_old_vite_plugin(
     digest = hashlib.sha256(normalized.encode()).hexdigest()
     if digest != _OLD_VITE_PLUGIN_SHA256:
         return  # Modified by user, don't touch
-    if dry_run:
+    if dry:
         print(f"🔄 Would upgrade old {path}")
         return
     path.unlink()
@@ -884,7 +887,7 @@ def write_file(
     path: Path,
     content: str,
     overwrite: bool = True,
-    dry_run: bool = False,
+    dry: bool = False,
     executable: bool = False,
     fallback_path: Path | None = None,
     force: bool = False,
@@ -913,12 +916,12 @@ def write_file(
             if fallback_path is not None:
                 # Write to fallback path instead
                 return _write_fallback_file(
-                    path, fallback_path, content, dry_run, executable
+                    path, fallback_path, content, dry, executable
                 )
             print(f"ℹ️  Skipping {path} (customized by user)")
             return False
 
-    if dry_run:
+    if dry:
         action = "overwrite" if exists else "create"
         print(f"✅ Would {action} {path}")
         return True
@@ -938,7 +941,7 @@ def _write_fallback_file(
     original_path: Path,
     fallback_path: Path,
     content: str,
-    dry_run: bool,
+    dry: bool,
     executable: bool,
 ) -> bool:
     """Write content to a fallback .new.py file when original can't be overwritten."""
@@ -948,7 +951,7 @@ def _write_fallback_file(
             print(f"✔️  {fallback_path} (already up to date)")
             return False
 
-    if dry_run:
+    if dry:
         print(f"✅ Would create {fallback_path} (original customized by user)")
         _new_files_written.append((fallback_path, original_path))
         return True
@@ -1085,13 +1088,13 @@ def find_js_runtime() -> tuple[str, str] | None:
     return None
 
 
-def ensure_python_project(project_dir: Path, dry_run: bool = False) -> bool:
+def ensure_python_project(project_dir: Path, dry: bool = False) -> bool:
     """Ensure pyproject.toml exists, run uv init if needed."""
     pyproject = project_dir / "pyproject.toml"
     if pyproject.exists():
         return True
 
-    if dry_run:
+    if dry:
         print(f"📦 Would run: uv init {project_dir}")
         return True
 
@@ -1111,7 +1114,7 @@ def ensure_python_project(project_dir: Path, dry_run: bool = False) -> bool:
     return True
 
 
-def ensure_frontend(project_dir: Path, dry_run: bool = False) -> bool:
+def ensure_frontend(project_dir: Path, dry: bool = False) -> bool:
     """Ensure frontend directory exists with a Vue project, run create-vue if needed."""
     frontend_dir = project_dir / "frontend"
     package_json = frontend_dir / "package.json"
@@ -1135,7 +1138,7 @@ def ensure_frontend(project_dir: Path, dry_run: bool = False) -> bool:
     }
     create_cmd = create_vue_commands[js_name]
 
-    if dry_run:
+    if dry:
         print(f"🎨 Would run: {' '.join(create_cmd)}")
         return True
 
@@ -1175,11 +1178,11 @@ def cmd_setup(args: argparse.Namespace) -> int:
         project_dir = Path.cwd() / project_path
 
     project_dir = project_dir.resolve()
-    dry_run = args.dry_run
+    dry = args.dry
 
     # Create project directory if it doesn't exist
     if not project_dir.exists():
-        if dry_run:
+        if dry:
             print(f"✅ Would create directory: {project_dir}")
         else:
             project_dir.mkdir(parents=True)
@@ -1187,15 +1190,15 @@ def cmd_setup(args: argparse.Namespace) -> int:
 
     print(f"🔧 Setting up project: {project_dir}")
 
-    if dry_run:
+    if dry:
         print("\n🏃 DRY RUN MODE - no changes will be made\n")
 
     # Step 1: Ensure frontend exists (do this first so cancellation doesn't leave partial setup)
-    if not ensure_frontend(project_dir, dry_run):
+    if not ensure_frontend(project_dir, dry):
         return 1
 
     # Step 2: Ensure Python project exists
-    if not ensure_python_project(project_dir, dry_run):
+    if not ensure_python_project(project_dir, dry):
         return 1
 
     # Detect module name
@@ -1261,7 +1264,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         tpl_vars["APP_MODULE"] = "app"
 
     # Create directories
-    if not dry_run:
+    if not dry:
         if not module_dir.exists():
             module_dir.mkdir(parents=True)
         fastapi_vue_scripts.mkdir(parents=True, exist_ok=True)
@@ -1273,7 +1276,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
     # Remove obsolete util.py if present
     obsolete_util = fastapi_vue_scripts / "util.py"
     if obsolete_util.exists():
-        if dry_run:
+        if dry:
             print(f"🗑️ Would remove obsolete {obsolete_util}")
         else:
             obsolete_util.unlink()
@@ -1290,7 +1293,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
                 dest_path,
                 content,
                 overwrite=True,
-                dry_run=dry_run,
+                dry=dry,
                 force=True,  # Internal files, always overwrite
             )
 
@@ -1303,7 +1306,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         devserver_path,
         content,
         overwrite=True,
-        dry_run=dry_run,
+        dry=dry,
         executable=True,
         fallback_path=devserver_fallback,
     )
@@ -1311,7 +1314,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
     # === Handle app module ===
     if app_file:
         # Existing app: patch with import, route, and try to patch lifespan
-        patch_app_file(app_file, module_name, app_var, dry_run=dry_run)
+        patch_app_file(app_file, module_name, app_var, dry=dry)
     else:
         # No app: create full app.py
         # Create __init__.py if missing
@@ -1319,13 +1322,13 @@ def cmd_setup(args: argparse.Namespace) -> int:
         if not init_file.exists():
             template = load_template("backend/__init__.py")
             content = render_template(template, **tpl_vars)
-            write_file(init_file, content, overwrite=False, dry_run=dry_run)
+            write_file(init_file, content, overwrite=False, dry=dry)
 
         # Create app.py
         app_file_path = module_dir / "app.py"
         template = load_template("backend/app.py")
         content = render_template(template, **tpl_vars)
-        write_file(app_file_path, content, overwrite=False, dry_run=dry_run)
+        write_file(app_file_path, content, overwrite=False, dry=dry)
 
     # === Handle __main__.py ===
     main_file = module_dir / "__main__.py"
@@ -1342,7 +1345,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
             main_file,
             main_content,
             overwrite=True,
-            dry_run=dry_run,
+            dry=dry,
             fallback_path=main_fallback,
         )
     elif not existing_cli:
@@ -1351,7 +1354,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
             main_file,
             main_content,
             overwrite=False,
-            dry_run=dry_run,
+            dry=dry,
         )
     else:
         # No file but has existing entrypoint - don't create (user has custom CLI setup)
@@ -1363,25 +1366,25 @@ def cmd_setup(args: argparse.Namespace) -> int:
         # Install the vite plugin file (always update)
         plugin_file = frontend_dir / "vite-plugin-fastapi.js"
         # Upgrade old plugin versions that lack the auto-upgrade marker
-        _upgrade_old_vite_plugin(plugin_file, module_name, dry_run)
+        _upgrade_old_vite_plugin(plugin_file, module_name, dry)
         template = load_template("frontend/vite-plugin-fastapi.js")
         content = render_template(template, **tpl_vars)
-        write_file(plugin_file, content, overwrite=True, dry_run=dry_run)
+        write_file(plugin_file, content, overwrite=True, dry=dry)
 
         # Find existing vite config (prefer .ts, fall back to .js)
         vite_config_ts = frontend_dir / "vite.config.ts"
         vite_config_js = frontend_dir / "vite.config.js"
 
         if vite_config_ts.exists():
-            patch_vite_config(vite_config_ts, module_name, dry_run)
+            patch_vite_config(vite_config_ts, module_name, dry)
         elif vite_config_js.exists():
-            patch_vite_config(vite_config_js, module_name, dry_run)
+            patch_vite_config(vite_config_js, module_name, dry)
         else:
             print("⚠️  No vite.config.ts or vite.config.js found in frontend/")
             print("   Run create-vue first to generate a Vite config to patch.")
 
         # Patch Vue app with backend health check
-        patch_frontend_health_check(frontend_dir, dry_run)
+        patch_frontend_health_check(frontend_dir, dry)
 
     # === Update pyproject.toml ===
     pyproject_path = project_dir / "pyproject.toml"
@@ -1402,7 +1405,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
 
         if new_content == old_content:
             print(f"✔️  {pyproject_path} (already up to date)")
-        elif dry_run:
+        elif dry:
             print(f"✅ Would update {pyproject_path}")
         else:
             pyproject_path.write_text(new_content, "UTF-8", newline="\n")
@@ -1415,7 +1418,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         gitignore_content = gitignore_path.read_bytes()
         if b"frontend-build" in gitignore_content:
             print("✔️  .gitignore (frontend-build already ignored)")
-        elif dry_run:
+        elif dry:
             print(f"✅ Would add {gitignore_entry} to .gitignore")
         else:
             nl = b"\r\n" if b"\r\n" in gitignore_content else b"\n"
@@ -1424,15 +1427,15 @@ def cmd_setup(args: argparse.Namespace) -> int:
                 gitignore_content + suffix + gitignore_entry.encode() + nl
             )
             print(f"✅ Added {gitignore_entry} to .gitignore")
-    elif dry_run:
+    elif dry:
         print(f"✅ Would create .gitignore with {gitignore_entry}")
     else:
         gitignore_path.write_text(f"{gitignore_entry}\n", "UTF-8", newline="\n")
         print("✅ Created .gitignore")
 
     # === Add dependencies using uv ===
-    ruff_sort_imports(_python_files_to_format, dry_run=dry_run)
-    if dry_run:
+    ruff_sort_imports(_python_files_to_format, dry=dry)
+    if dry:
         print("📦 Would add: fastapi[standard], fastapi-vue, httpx (dev only)")
     else:
         print("📦 Dependencies")
@@ -1496,14 +1499,14 @@ def is_already_patched(path: Path) -> bool:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Set up FastAPI+Vue projects with integrated build/dev systems",
+        description=f"fastapi-vue-setup {version} - FastAPI + Vue project setup tool",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
   fastapi-vue-setup my-new-project     Create a new project from scratch
   fastapi-vue-setup .                  Set up integration in current directory
-  fastapi-vue-setup . --dry-run        Preview what would be done
-  fastapi-vue-setup . --ports=8000,5173,8080  Custom ports (default,vite,dev)
+  fastapi-vue-setup . --dry            Preview what would be done
+  fastapi-vue-setup . --ports=8000,5173,8080  Change default ports (backend, vite dev, backend dev)
 """,
     )
     parser.add_argument(
@@ -1512,15 +1515,14 @@ Examples:
         default=None,
         help="Project directory (use . for current directory)",
     )
+    parser.add_argument("--version", action="version", version=version)
     parser.add_argument("--module-name", help="Python module name (auto-detected)")
     parser.add_argument(
         "--ports",
-        metavar="DEFAULT,VITE,DEV",
+        metavar="BACKEND,VITE,DEV",
         help="Port configuration as comma-separated values (default: 3100,3100,3200)",
     )
-    parser.add_argument(
-        "--dry-run", action="store_true", help="Show what would be done"
-    )
+    parser.add_argument("--dry", action="store_true", help="Show what would be done")
 
     args = parser.parse_args()
 
