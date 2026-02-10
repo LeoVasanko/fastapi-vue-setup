@@ -161,17 +161,16 @@ STATUS_SPAN_TEMPLATE = """\
 """
 
 # Setup complete message template
-SETUP_COMPLETE_MESSAGE = """
-Next steps:
+SETUP_COMPLETE_MESSAGE = """\
+>>> Development server: (live reloads, debug)
+CD_CMDuv run scripts/devserver.py
 
-1. Build for production:
-   CD_CMDuv build
+>>> Production build:
+CD_CMDuv build && uv run SCRIPT_NAME
 
-2. Start development server:
-   CD_CMDuv run scripts/devserver.py
-
-3. Run production server:
-   CD_CMDuv run SCRIPT_NAME
+>>> Release Python package, run anywhere:
+CD_CMDuv build && uv publish
+uvx SCRIPT_NAME  # No Node required
 """
 
 
@@ -1454,7 +1453,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
     print_boxed("Setup complete!")
 
     # Show cd command only if project is not in current directory
-    cd_cmd = "" if project_dir == Path.cwd() else f"cd {project_dir}\n   "
+    cd_cmd = "" if project_dir == Path.cwd() else f"cd {project_dir}; "
     script_name = module_name.replace("_", "-")
 
     message = SETUP_COMPLETE_MESSAGE.replace("CD_CMD", cd_cmd).replace(
