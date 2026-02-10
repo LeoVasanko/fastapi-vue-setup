@@ -33,6 +33,14 @@ _python_files_to_format: list[Path] = []
 TEMPLATE_DIR = Path(__file__).parent / "template"
 
 
+def print_boxed(text: str) -> None:
+    """Print text in a Unicode rounded box."""
+    width = len(text) + 2
+    print(f"╭{'─' * width}╮")
+    print(f"│ {text} │")
+    print(f"╰{'─' * width}╯")
+
+
 def ruff_sort_imports(files: list[Path], dry: bool = False) -> None:
     """Run ruff to sort imports in the given Python files."""
     if not files:
@@ -850,9 +858,7 @@ _OLD_VITE_PLUGIN_SHA256 = (
 )
 
 
-def _upgrade_old_vite_plugin(
-    path: Path, module_name: str, dry: bool = False
-) -> None:
+def _upgrade_old_vite_plugin(path: Path, module_name: str, dry: bool = False) -> None:
     """Remove old vite-plugin-fastapi.js that lacks auto-upgrade marker.
 
     Old versions didn't have the upgrade marker, so write_file skips them as
@@ -1180,6 +1186,8 @@ def cmd_setup(args: argparse.Namespace) -> int:
     project_dir = project_dir.resolve()
     dry = args.dry
 
+    print_boxed(f"fastapi-vue-setup {version}")
+
     # Create project directory if it doesn't exist
     if not project_dir.exists():
         if dry:
@@ -1443,9 +1451,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         uv_add_packages(["httpx"], cwd=project_dir, group="dev")
 
     print()
-    print("=" * 60)
-    print("✅ Setup complete!")
-    print("=" * 60)
+    print_boxed("Setup complete!")
 
     # Show cd command only if project is not in current directory
     cd_cmd = "" if project_dir == Path.cwd() else f"cd {project_dir}\n   "
@@ -1470,11 +1476,6 @@ def cmd_setup(args: argparse.Namespace) -> int:
         _new_files_written.clear()
 
     return 0
-
-
-# =============================================================================
-# Main entry point
-# =============================================================================
 
 
 def is_uninitialized_folder(path: Path) -> bool:
