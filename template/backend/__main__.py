@@ -5,7 +5,7 @@ import os
 from fastapi_vue import server
 
 DEFAULT_PORT = TEMPLATE_DEFAULT_PORT
-DEVMODE = bool(os.getenv("ENVPREFIX_FRONTEND_URL"))
+DEVMODE = bool(os.getenv("ENVPREFIX_DEV") == "1")
 
 
 def main():
