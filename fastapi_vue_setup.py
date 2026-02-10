@@ -50,7 +50,18 @@ def ruff_format_content(content: str, target_path: Path) -> str:
         temp_file.write_text(content, "UTF-8", newline="\n")
         # Sort imports first
         subprocess.run(
-            ["uv", "run", "--with", "ruff", "ruff", "check", "--select", "I", "--fix", str(temp_file)],
+            [
+                "uv",
+                "run",
+                "--with",
+                "ruff",
+                "ruff",
+                "check",
+                "--select",
+                "I",
+                "--fix",
+                str(temp_file),
+            ],
             cwd=target_path.parent,
             capture_output=True,
         )

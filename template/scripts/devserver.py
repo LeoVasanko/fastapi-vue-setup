@@ -56,7 +56,8 @@ def main():
         epilog=HELP_EPILOG,
     )
     parser.add_argument(
-        "-l", "--listen",
+        "-l",
+        "--listen",
         metavar="host:port",
         help=f"Vite (default: localhost:{DEFAULT_VITE_PORT})",
     )
