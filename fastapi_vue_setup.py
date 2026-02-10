@@ -26,9 +26,6 @@ import tomlkit
 
 version = importlib.metadata.version("fastapi-vue-setup")
 
-# Track Python files written/patched for ruff formatting
-_python_files_to_format: list[Path] = []
-
 # Template directory
 TEMPLATE_DIR = Path(__file__).parent / "template"
 
@@ -41,21 +38,38 @@ def print_boxed(text: str) -> None:
     print(f"╰{'─' * width}╯")
 
 
-def ruff_sort_imports(files: list[Path], dry: bool = False) -> None:
-    """Run ruff to sort imports in the given Python files."""
-    if not files:
-        return
-    py_files = [str(f) for f in files if f.suffix == ".py" and f.exists()]
-    if not py_files:
-        return
-    if dry:
-        print(f"🔧 Would run ruff import sorting on {len(py_files)} files")
-        return
-    print("🔧 Ruff isort on modified files")
-    subprocess.run(
-        [sys.executable, "-m", "ruff", "check", "--select", "I", "--fix", *py_files],
-        stdout=subprocess.DEVNULL,
-    )
+def ruff_format_content(content: str, target_path: Path) -> str:
+    """Format Python content using ruff with project settings.
+
+    Writes to a temp file (.new.py) next to target, runs ruff check (import sorting)
+    and ruff format on it, reads back the result, and cleans up.
+    Returns the formatted content, or original if ruff fails.
+    """
+    temp_file = target_path.with_suffix(".new.py")
+    try:
+        temp_file.write_text(content, "UTF-8", newline="\n")
+        # Sort imports first
+        subprocess.run(
+            ["uv", "run", "--with", "ruff", "ruff", "check", "--select", "I", "--fix", str(temp_file)],
+            cwd=target_path.parent,
+            capture_output=True,
+        )
+        # Then format
+        result = subprocess.run(
+            ["uv", "run", "--with", "ruff", "ruff", "format", str(temp_file)],
+            cwd=target_path.parent,
+            capture_output=True,
+        )
+        if result.returncode == 0:
+            return temp_file.read_text("UTF-8")
+    except Exception:
+        pass
+    finally:
+        try:
+            temp_file.unlink(missing_ok=True)
+        except Exception:
+            pass
+    return content
 
 
 def uv_add_packages(
@@ -655,7 +669,6 @@ def patch_app_file(
         return True
 
     path.write_text(content, "UTF-8", newline="\n")
-    _python_files_to_format.append(path)
     print(f"✅ Patched {path}")
 
     if not lifespan_patched:
@@ -903,13 +916,20 @@ def write_file(
     the content will be written to fallback_path instead of being skipped.
 
     If force=True, always overwrite without checking for upgrade marker.
+
+    Python files (.py) are automatically formatted using ruff with the project's
+    settings before writing.
     """
+    # Format Python content using project settings before any comparison/writing
+    if path.suffix == ".py":
+        content = ruff_format_content(content, path)
+
     exists = path.exists()
     if exists and not overwrite:
         print(f"⚠️  Skipping {path} (exists)")
         return False
 
-    # Check if content is the same
+    # Check if content is the same (new content already formatted)
     if exists:
         existing_content = path.read_text("UTF-8")
         if existing_content == content:
@@ -935,8 +955,6 @@ def write_file(
     path.write_text(content, "UTF-8", newline="\n")
     if executable and sys.platform != "win32":
         path.chmod(path.stat().st_mode | 0o111)
-    if path.suffix == ".py":
-        _python_files_to_format.append(path)
     action = "Updated" if exists else "Created"
     print(f"✅ {action} {path}")
     return True
@@ -949,10 +967,14 @@ def _write_fallback_file(
     dry: bool,
     executable: bool,
 ) -> bool:
-    """Write content to a fallback .new.py file when original can't be overwritten."""
-    # Check if fallback already has same content
+    """Write content to a fallback .new.py file when original can't be overwritten.
+
+    Note: content should already be formatted before calling this function.
+    """
+    # Check if fallback already has same content (content already formatted)
     if fallback_path.exists():
-        if fallback_path.read_text("UTF-8") == content:
+        existing_content = fallback_path.read_text("UTF-8")
+        if existing_content == content:
             print(f"✔️  {fallback_path} (already up to date)")
             return False
 
@@ -965,8 +987,6 @@ def _write_fallback_file(
     fallback_path.write_text(content, "UTF-8", newline="\n")
     if executable and sys.platform != "win32":
         fallback_path.chmod(fallback_path.stat().st_mode | 0o111)
-    if fallback_path.suffix == ".py":
-        _python_files_to_format.append(fallback_path)
     print(f"✅ Created {fallback_path} (original customized by user)")
     _new_files_written.append((fallback_path, original_path))
     return True
@@ -1440,7 +1460,6 @@ def cmd_setup(args: argparse.Namespace) -> int:
         print("✅ Created .gitignore")
 
     # === Add dependencies using uv ===
-    ruff_sort_imports(_python_files_to_format, dry=dry)
     if dry:
         print("📦 Would add: fastapi[standard], fastapi-vue, httpx (dev only)")
     else:
