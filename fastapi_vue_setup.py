@@ -162,13 +162,13 @@ STATUS_SPAN_TEMPLATE = """\
 
 # Setup complete message template
 SETUP_COMPLETE_MESSAGE = """\
->>> Development server: (live reloads, debug)
+## Development server: (live reloads, debug)
 CD_CMDuv run scripts/devserver.py
 
->>> Production build:
+## Production build:
 CD_CMDuv build && uv run SCRIPT_NAME
 
->>> Release Python package, run anywhere:
+## Release Python package, run anywhere:
 CD_CMDuv build && uv publish
 uvx SCRIPT_NAME  # No Node required
 """
