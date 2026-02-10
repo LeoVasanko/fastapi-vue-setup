@@ -1503,7 +1503,7 @@ Examples:
   fastapi-vue-setup my-new-project     Create a new project from scratch
   fastapi-vue-setup .                  Set up integration in current directory
   fastapi-vue-setup . --dry-run        Preview what would be done
-  fastapi-vue-setup . --ports 8000,5173,8080  Custom ports (default,vite,dev)
+  fastapi-vue-setup . --ports=8000,5173,8080  Custom ports (default,vite,dev)
 """,
     )
     parser.add_argument(
