@@ -115,7 +115,7 @@ const backendStatus = ref<'checking' | 'connected' | 'error'>('checking')
 
 onMounted(async () => {
   try {
-    const res = await fetch('/api/health')
+    const res = await fetch('/api/health?from=frontend')
     backendStatus.value = res.ok ? 'connected' : 'error'
   } catch {
     backendStatus.value = 'error'
@@ -131,7 +131,7 @@ const backendStatus = ref('checking')
 
 onMounted(async () => {
   try {
-    const res = await fetch('/api/health')
+    const res = await fetch('/api/health?from=frontend')
     backendStatus.value = res.ok ? 'connected' : 'error'
   } catch {
     backendStatus.value = 'error'
