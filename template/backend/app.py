@@ -3,7 +3,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi_vue import Frontend
-from MODULE_NAME.__main__ import DEVMODE
+from MAIN_MODULE import DEVMODE
 
 # Vue Frontend static files
 frontend = Frontend(Path(__file__).with_name("frontend-build"))
