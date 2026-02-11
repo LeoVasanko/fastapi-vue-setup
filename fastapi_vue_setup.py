@@ -1347,13 +1347,15 @@ def cmd_setup(args: argparse.Namespace) -> int:
         app_file, app_var = app_info
         print(f"📍 Found FastAPI app: {app_var} in {app_file.name}")
         tpl_vars["APP_VAR"] = app_var
-        tpl_vars["APP_MODULE"] = app_file.stem
+        # Dotted module path relative to project dir (e.g. "paskia.fastapi.mainapp")
+        app_module = ".".join(app_file.relative_to(project_dir).with_suffix("").parts)
+        tpl_vars["APP_MODULE"] = app_module
     else:
         print("📍 No existing FastAPI app found, will create new one")
         app_file = None
         app_var = "app"
         tpl_vars["APP_VAR"] = app_var
-        tpl_vars["APP_MODULE"] = "app"
+        tpl_vars["APP_MODULE"] = f"{module_name}.app"
 
     # Create directories
     if not dry:
