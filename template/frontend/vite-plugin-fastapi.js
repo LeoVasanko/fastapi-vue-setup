@@ -11,7 +11,7 @@
  */
 
 export default function fastapiVue({ paths = ["/api"] } = {}) {
-  const backendUrl = process.env.ENVPREFIX_BACKEND_URL || "http://localhost:TEMPLATE_DEFAULT_PORT"
+  const backendUrl = process.env.ENVPREFIX_BACKEND_URL || "http://localhost:TEMPLATE_DEV_PORT"
 
   // Build proxy configuration for each path
   const proxy = {}
