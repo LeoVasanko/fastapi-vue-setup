@@ -260,23 +260,20 @@ def find_import_insertion_line(source: str) -> int:
     return 2 if source.startswith("#!") else 1
 
 
-def extract_existing_ports(project_dir: Path) -> tuple[int, int, int] | None:
+def extract_existing_ports(
+    project_dir: Path, main: Path
+) -> tuple[int, int, int] | None:
     """Extract existing port configuration from project files.
 
     Returns (default, vite, dev) or None if not found.
     """
-    module_name = find_module_name(project_dir)
-    if not module_name:
-        return None
-
     default_port = None
     vite_port = None
     dev_port = None
 
-    # Try to extract DEFAULT_PORT from __main__.py
-    main_file = project_dir / module_name / "__main__.py"
-    if main_file.exists():
-        content = main_file.read_text("UTF-8")
+    # Try to extract DEFAULT_PORT from the CLI main module
+    if main.exists():
+        content = main.read_text("UTF-8")
         match = re.search(r"DEFAULT_PORT\s*=\s*(\d+)", content)
         if match:
             default_port = int(match.group(1))
@@ -845,7 +842,7 @@ def patch_frontend_health_check(frontend_dir: Path, dry: bool = False) -> bool:
             target_file = app_vue
 
     if target_file is None:
-        print("ℹ️  No Vue file found to patch, skipping frontend health check")
+        print("ℹ️  No default App.vue found to patch, not adding /api/health check")
         return False
 
     original_content = target_file.read_text("UTF-8")
@@ -890,7 +887,7 @@ def patch_frontend_health_check(frontend_dir: Path, dry: bool = False) -> bool:
     else:
         # Minimal App.vue - only patch if it contains the default welcome message
         if "<h1>You did it!</h1>" not in content:
-            print(f"ℹ️  Skipping {target_file} (not a default Vue template)")
+            print(f"ℹ️  Skipping {target_file} (not a Vue demo app)")
             return False
         # Insert before the </p> tag
         template_end = content.find("</template>")
@@ -1293,13 +1290,28 @@ def cmd_setup(args: argparse.Namespace) -> int:
     else:
         print(f"📦 Module: {module_name}")
 
+    module_dir = project_dir / module_name
+    scripts_dir = project_dir / "scripts"
+    fastapi_vue_scripts = scripts_dir / "fastapi-vue"
+
+    # Check if project already has a CLI entrypoint in pyproject.toml
+    existing_cli_module = _find_existing_cli_module_path(project_dir, module_name)
+
+    # Determine main module path for DEVMODE import
+    main_module_path = existing_cli_module or f"{module_name}.__main__"
+    if existing_cli_module:
+        print(f"ℹ️  Using existing CLI: {existing_cli_module}")
+
+    # Resolve the CLI main module to a file path
+    main = project_dir / Path(*main_module_path.split(".")).with_suffix(".py")
+
     # Determine port configuration
     # Priority: --ports argument > existing project values > defaults
     if args.ports:
         default_port, vite_port, dev_port = parse_ports(args.ports)
         ports_note = "(--ports)"
     else:
-        existing_ports = extract_existing_ports(project_dir)
+        existing_ports = extract_existing_ports(project_dir, main)
         if existing_ports:
             default_port, vite_port, dev_port = existing_ports
             ports_note = "(kept for upgrade)"
@@ -1314,20 +1326,10 @@ def cmd_setup(args: argparse.Namespace) -> int:
     # Title for templates
     project_title = module_name.replace("_", " ").title()
 
-    module_dir = project_dir / module_name
-    scripts_dir = project_dir / "scripts"
-    fastapi_vue_scripts = scripts_dir / "fastapi-vue"
-
     # Find existing FastAPI app
     app_info = (
         find_fastapi_app(module_dir, project_dir) if module_dir.exists() else None
     )
-
-    # Check if project already has a CLI entrypoint in pyproject.toml
-    existing_cli_module = _find_existing_cli_module_path(project_dir, module_name)
-
-    # Determine main module path for DEVMODE import
-    main_module_path = existing_cli_module or f"{module_name}.__main__"
 
     # Template variables
     tpl_vars = {
@@ -1423,11 +1425,8 @@ def cmd_setup(args: argparse.Namespace) -> int:
     # === Handle __main__.py ===
     if existing_cli_module:
         # Existing CLI entrypoint - write .new.py beside the existing main module
-        main_module_parts = existing_cli_module.split(".")
-        main_module_file = project_dir / ("/".join(main_module_parts) + ".py")
-        main_fallback = main_module_file.with_suffix(".new.py")
+        main_fallback = main.with_suffix(".new.py")
     else:
-        main_module_file = None
         main_fallback = module_dir / "__main__.new.py"
 
     main_file = module_dir / "__main__.py"
@@ -1454,28 +1453,27 @@ def cmd_setup(args: argparse.Namespace) -> int:
     else:
         # Existing CLI entrypoint: write our template as .new.py beside the existing module
         # and also patch the existing module with DEVMODE if needed
-        print(f"ℹ️  Using existing CLI: {existing_cli_module}")
         _write_fallback_file(
-            main_module_file or main_file,
+            main,
             main_fallback,
             main_content,
             dry=dry,
             executable=False,
         )
-        if main_module_file and main_module_file.exists():
-            content = main_module_file.read_text("UTF-8")
+        if main.exists():
+            content = main.read_text("UTF-8")
             if "DEVMODE" not in content:
                 new_content = _add_devmode_to_main(content)
-                new_file = main_module_file.with_suffix(".new.py")
+                new_file = main.with_suffix(".new.py")
                 _write_fallback_file(
-                    main_module_file,
+                    main,
                     new_file,
                     new_content,
                     dry=dry,
                     executable=False,
                 )
-        elif main_module_file:
-            print(f"⚠️  Existing CLI main module {main_module_file} not found")
+        else:
+            print(f"⚠️  Existing CLI main module {main} not found")
 
     # === Update vite.config.js/ts ===
     frontend_dir = project_dir / "frontend"
