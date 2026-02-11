@@ -58,12 +58,12 @@ def main():
     parser.add_argument(
         "-l",
         "--listen",
-        metavar="host:port",
+        metavar="addr",
         help=f"Vite (default: localhost:{DEFAULT_VITE_PORT})",
     )
     parser.add_argument(
         "--backend",
-        metavar="host:port",
+        metavar="addr",
         help=f"FastAPI (default: localhost:{DEFAULT_DEV_PORT})",
     )
     args, extra_args = parser.parse_known_args()
@@ -72,7 +72,7 @@ def main():
 
 
 HELP_EPILOG = """
-  scripts/devserver.py [args to PROJECT_CLI]
+  Other options are forwarded to PROJECT_CLI [args]
 
   JS_RUNTIME environment variable can be used to select the JS runtime:
   npm, deno, bun, or full path to the runtime executable (node maps to npm).
