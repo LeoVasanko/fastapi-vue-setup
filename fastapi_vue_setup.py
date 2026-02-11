@@ -21,6 +21,7 @@ import subprocess
 import sys
 from pathlib import Path
 from textwrap import indent
+from typing import Literal
 
 import tomlkit
 
@@ -38,12 +39,16 @@ def print_boxed(text: str) -> None:
     print(f"╰{'─' * width}╯")
 
 
-def ruff_format_content(content: str, target_path: Path) -> str:
+def ruff_format_content(
+    content: str, target_path: Path, *, mode: Literal["isort", "full"] = "full"
+) -> str:
     """Format Python content using ruff with project settings.
 
-    Writes to a temp file (.new.py) next to target, runs ruff check (import sorting)
-    and ruff format on it, reads back the result, and cleans up.
+    Writes to a temp file next to target, runs ruff check (import sorting)
+    and optionally ruff format on it, reads back the result, and cleans up.
     Returns the formatted content, or original if ruff fails.
+
+    mode='isort' only sorts imports; mode='full' also formats.
     """
     temp_file = target_path.with_suffix(".new.py")
     try:
@@ -65,6 +70,8 @@ def ruff_format_content(content: str, target_path: Path) -> str:
             cwd=target_path.parent,
             capture_output=True,
         )
+        if mode == "isort":
+            return temp_file.read_text("UTF-8")
         # Then format
         result = subprocess.run(
             ["uv", "run", "--with", "ruff", "ruff", "format", str(temp_file)],
@@ -715,6 +722,8 @@ def patch_app_file(
         print(f"✅ Would patch {path}")
         return True
 
+    # Sort imports only (avoid full formatting of user code)
+    content = ruff_format_content(content, path, mode="isort")
     path.write_text(content, "UTF-8", newline="\n")
     print(f"✅ Patched {path}")
 
