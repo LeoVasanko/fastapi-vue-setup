@@ -1564,9 +1564,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
     # Show merge note if any .new.py files were written
     if _new_files_written:
         print()
-        print(
-            "⚠️  Note: Some files could not be auto-upgraded because you customized them."
-        )
+        print("⚠️  Some files could not be auto-upgraded because you customized them.")
         print("   Please manually merge the following files:")
         for new_file, original_file in _new_files_written:
             try:
