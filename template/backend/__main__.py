@@ -17,12 +17,12 @@ def main():
         help=(f"Endpoint (default: localhost:{DEFAULT_PORT})."),
     )
     args = parser.parse_args()
-    dev = {"reload": True, "reload_dirs": ["MODULE_NAME"]}
+    dev = {"reload": True, "reload_dirs": ["paskia"]} if DEVMODE else {}
     server.run(
-        "MODULE_NAME.APP_MODULE:APP_VAR",
+        "APP_MODULE:APP_VAR",
         listen=args.listen,
         default_port=DEFAULT_PORT,
-        **(dev if DEVMODE else {}),
+        **dev,
     )
 
 
