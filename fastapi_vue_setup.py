@@ -427,10 +427,43 @@ def _find_app_in_subpackage(subpkg_dir: Path) -> tuple[Path, str] | None:
     return None
 
 
-def _find_existing_cli_entrypoint(project_dir: Path, module_name: str) -> str | None:
+def _add_devmode_to_main(content: str) -> str:
+    """Add DEVMODE variable to an existing main module."""
+    lines = content.splitlines()
+
+    # Check if os is imported
+    has_os_import = any("import os" in line for line in lines)
+
+    # Find the first import line
+    insert_idx = 0
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith("import ") or stripped.startswith("from "):
+            insert_idx = i + 1
+        elif stripped and not stripped.startswith("#"):
+            break
+
+    # Insert imports and DEVMODE after existing imports
+    new_lines = []
+    if not has_os_import:
+        new_lines.append("import os")
+    new_lines.extend(
+        [
+            "",
+            "# Added by fastapi-vue-setup",
+            'DEVMODE = os.getenv("ENVPREFIX_DEV") == "1"',
+            "",
+        ]
+    )
+
+    lines[insert_idx:insert_idx] = new_lines
+    return "\n".join(lines)
+
+
+def _find_existing_cli_module_path(project_dir: Path, module_name: str) -> str | None:
     """Check if pyproject.toml already has a CLI entrypoint for this module.
 
-    Returns the entrypoint string if found, None otherwise.
+    Returns the module path (e.g., 'module.subpkg.__main__') if found, None otherwise.
     """
     pyproject = project_dir / "pyproject.toml"
     if not pyproject.exists():
@@ -448,7 +481,10 @@ def _find_existing_cli_entrypoint(project_dir: Path, module_name: str) -> str | 
     # Look for any script that references our module
     for script_name, entry in scripts.items():
         if isinstance(entry, str) and entry.startswith(f"{module_name}."):
-            return f'{script_name} = "{entry}"'
+            # Extract module path from "module.subpkg.__main__:main"
+            if ":" in entry:
+                module_path, _ = entry.rsplit(":", 1)
+                return module_path
 
     return None
 
@@ -517,7 +553,7 @@ def render_template(template: str, **kwargs) -> str:
 
 
 def patch_app_file(
-    path: Path, module_name: str, app_var: str, dry: bool = False
+    path: Path, main_module_path: str, app_var: str, dry: bool = False
 ) -> bool:
     """Patch an existing app.py with frontend integration.
 
@@ -535,7 +571,7 @@ def patch_app_file(
 
     # Check what's already patched
     has_frontend = "from fastapi_vue import Frontend" in content
-    has_devmode = f"from {module_name}.__main__ import DEVMODE" in content
+    has_devmode = f"from {main_module_path} import DEVMODE" in content
     has_debug_arg = re.search(r"FastAPI\s*\([^)]*debug\s*=", content) is not None
     has_lifespan = "await frontend.load()" in content
 
@@ -550,7 +586,7 @@ def patch_app_file(
     if not has_frontend:
         imports.extend(["from pathlib import Path", "from fastapi_vue import Frontend"])
     if not has_devmode:
-        imports.append(f"from {module_name}.__main__ import DEVMODE")
+        imports.append(f"from {main_module_path} import DEVMODE")
     if imports:
         insert_line = find_import_insertion_line(content)
         lines = content.splitlines(keepends=True)
@@ -987,6 +1023,7 @@ def _write_fallback_file(
         existing_content = fallback_path.read_text("UTF-8")
         if existing_content == content:
             print(f"✔️  {fallback_path} (already up to date)")
+            _new_files_written.append((fallback_path, original_path))
             return False
 
     if dry:
@@ -1268,6 +1305,21 @@ def cmd_setup(args: argparse.Namespace) -> int:
     # Title for templates
     project_title = module_name.replace("_", " ").title()
 
+    module_dir = project_dir / module_name
+    scripts_dir = project_dir / "scripts"
+    fastapi_vue_scripts = scripts_dir / "fastapi-vue"
+
+    # Find existing FastAPI app
+    app_info = (
+        find_fastapi_app(module_dir, project_dir) if module_dir.exists() else None
+    )
+
+    # Check if project already has a CLI entrypoint in pyproject.toml
+    existing_cli_module = _find_existing_cli_module_path(project_dir, module_name)
+
+    # Determine main module path for DEVMODE import
+    main_module_path = existing_cli_module or f"{module_name}.__main__"
+
     # Template variables
     tpl_vars = {
         "MODULE_NAME": module_name,
@@ -1277,16 +1329,8 @@ def cmd_setup(args: argparse.Namespace) -> int:
         "TEMPLATE_DEV_PORT": str(dev_port),
         "ENVPREFIX": module_name.upper(),
         "PROJECT_CLI": module_name,
+        "MAIN_MODULE": main_module_path,
     }
-
-    module_dir = project_dir / module_name
-    scripts_dir = project_dir / "scripts"
-    fastapi_vue_scripts = scripts_dir / "fastapi-vue"
-
-    # Find existing FastAPI app
-    app_info = (
-        find_fastapi_app(module_dir, project_dir) if module_dir.exists() else None
-    )
 
     if app_info:
         app_file, app_var = app_info
@@ -1351,7 +1395,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
     # === Handle app module ===
     if app_file:
         # Existing app: patch with import, route, and try to patch lifespan
-        patch_app_file(app_file, module_name, app_var, dry=dry)
+        patch_app_file(app_file, main_module_path, app_var, dry=dry)
     else:
         # No app: create full app.py
         # Create __init__.py if missing
@@ -1368,13 +1412,18 @@ def cmd_setup(args: argparse.Namespace) -> int:
         write_file(app_file_path, content, overwrite=False, dry=dry)
 
     # === Handle __main__.py ===
+    if existing_cli_module:
+        # Existing CLI entrypoint - write .new.py beside the existing main module
+        main_module_parts = existing_cli_module.split(".")
+        main_module_file = project_dir / ("/".join(main_module_parts) + ".py")
+        main_fallback = main_module_file.with_suffix(".new.py")
+    else:
+        main_module_file = None
+        main_fallback = module_dir / "__main__.new.py"
+
     main_file = module_dir / "__main__.py"
-    main_fallback = module_dir / "__main__.new.py"
     template = load_template("backend/__main__.py")
     main_content = render_template(template, **tpl_vars)
-
-    # Check if project already has a CLI entrypoint in pyproject.toml
-    existing_cli = _find_existing_cli_entrypoint(project_dir, module_name)
 
     if main_file.exists():
         # File exists: update if it has the auto-upgrade marker, otherwise use fallback
@@ -1385,7 +1434,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
             dry=dry,
             fallback_path=main_fallback,
         )
-    elif not existing_cli:
+    elif not existing_cli_module:
         # No file and no existing entrypoint: create new __main__.py
         write_file(
             main_file,
@@ -1394,8 +1443,30 @@ def cmd_setup(args: argparse.Namespace) -> int:
             dry=dry,
         )
     else:
-        # No file but has existing entrypoint - don't create (user has custom CLI setup)
-        print(f"ℹ️  Skipping __main__.py (package already has CLI: {existing_cli})")
+        # Existing CLI entrypoint: write our template as .new.py beside the existing module
+        # and also patch the existing module with DEVMODE if needed
+        print(f"ℹ️  Using existing CLI: {existing_cli_module}")
+        _write_fallback_file(
+            main_module_file or main_file,
+            main_fallback,
+            main_content,
+            dry=dry,
+            executable=False,
+        )
+        if main_module_file and main_module_file.exists():
+            content = main_module_file.read_text("UTF-8")
+            if "DEVMODE" not in content:
+                new_content = _add_devmode_to_main(content)
+                new_file = main_module_file.with_suffix(".new.py")
+                _write_fallback_file(
+                    main_module_file,
+                    new_file,
+                    new_content,
+                    dry=dry,
+                    executable=False,
+                )
+        elif main_module_file:
+            print(f"⚠️  Existing CLI main module {main_module_file} not found")
 
     # === Update vite.config.js/ts ===
     frontend_dir = project_dir / "frontend"
@@ -1498,7 +1569,13 @@ def cmd_setup(args: argparse.Namespace) -> int:
         )
         print("   Please manually merge the following files:")
         for new_file, original_file in _new_files_written:
-            print(f"     • {new_file.name} → {original_file.name}")
+            try:
+                new_rel = new_file.relative_to(project_dir)
+                orig_rel = original_file.relative_to(project_dir)
+            except ValueError:
+                new_rel = new_file.name
+                orig_rel = original_file.name
+            print(f"     • {new_rel} → {orig_rel}")
         print()
         # Clear the list for potential subsequent runs
         _new_files_written.clear()
