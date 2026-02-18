@@ -41,7 +41,7 @@ def run(
         conf["forwarded_allow_ips"] = proxy
     conf.update(uvicorn_config)
 
-    with suppress(KeyboardInterrupt):
+    with suppress(KeyboardInterrupt, asyncio.CancelledError):
         if reload or workers:
             serve_multiprocess(endpoints, **conf)
         else:
