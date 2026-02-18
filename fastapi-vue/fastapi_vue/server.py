@@ -6,7 +6,7 @@ from contextlib import suppress
 import uvicorn
 from uvicorn import Config, Server
 
-from .hostutil import parse_endpoint
+from .hostutil import parse_endpoints
 
 logger = logging.getLogger(__name__)
 
@@ -30,13 +30,9 @@ def run(
         workers: Number of worker processes (requires uvicorn.run, single endpoint only).
         **uvicorn_config: Additional uvicorn config options (overrides all other settings).
     """
-    if listen is None:
-        listen = [f"localhost:{default_port}"]
-    elif isinstance(listen, str):
-        listen = [listen]
-    endpoints: list[dict] = []
-    for ep in listen:
-        endpoints.extend(parse_endpoint(ep, default_port))
+    endpoints = parse_endpoints(listen, default_port)
+    if not endpoints:
+        raise ValueError("No endpoints to serve; check listen configuration")
 
     conf: dict[str, object] = {"app": app, "reload": reload, "workers": workers}
     proxy = os.getenv("FORWARDED_ALLOW_IPS", "127.0.0.1,::1")
