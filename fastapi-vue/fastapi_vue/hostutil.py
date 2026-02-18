@@ -12,6 +12,7 @@ def parse_endpoint(value: str | None, default_port: int = 0) -> list[dict]:
 
     Returns:
         List of dicts with uvicorn bind kwargs (host/port or uds).
+        Two entries may be returned for IPv4 and IPv6 (all interaces).
 
     Supported forms:
     - None or empty -> [{host: "localhost", port: default_port}]
@@ -65,3 +66,19 @@ def parse_endpoint(value: str | None, default_port: int = 0) -> list[dict]:
         ipaddress.ip_address(host)
 
     return [{"host": host, "port": port}]
+
+
+def parse_endpoints(
+    listen: str | list[str] | None = None, default_port: int = 8000
+) -> list[dict]:
+    """Parse listen strings into a list of endpoint dicts.
+
+    Args:
+        listen: Endpoint string(s) (see parse_endpoint for formats).
+        default_port: Port to use when not specified in listen args.
+    """
+    if listen is None:
+        listen = [f"localhost:{default_port}"]
+    elif isinstance(listen, str):
+        listen = [listen]
+    return [ep for s in listen for ep in parse_endpoint(s, default_port)]
