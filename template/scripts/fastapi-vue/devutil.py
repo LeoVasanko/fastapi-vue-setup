@@ -111,18 +111,19 @@ async def check_ports_free(*urls: str) -> None:
         await asyncio.gather(*[check(client, url) for url in urls])
 
 
-async def ready(url: str, path: str = "") -> None:
+async def ready(url: str, path: str = "", max_attempts=50) -> None:
     """Wait for the server to be ready by polling an endpoint.
 
+    Use empty path to disable the check and make this return immediately.
     Raises SystemExit(1) if server doesn't start in time.
     """
-    max_attempts = 50
-    full_url = f"{url}{path}"
+    if not path:
+        return
 
     async with httpx.AsyncClient() as client:
         for attempt in range(max_attempts):
             try:
-                await client.get(full_url, timeout=1.0)
+                await client.get(f"{url}{path}", timeout=1.0)
                 logger.info("✓ Backend ready!")
                 return
             except httpx.RequestError:

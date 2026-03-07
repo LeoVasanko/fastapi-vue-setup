@@ -110,6 +110,9 @@ def uv_add_packages(
 # If vite == dev, dev is incremented by 100
 DEFAULT_PORTS = (3100, 3100, 3200)
 
+# Default health check path for devserver backend readiness check
+DEFAULT_HEALTH = "/api/health?from=devserver.py"
+
 # Marker comment indicating file can be auto-upgraded
 # Users should remove this line to prevent automatic updates
 UPGRADE_MARKER = "auto-upgrade@fastapi-vue-setup"
@@ -298,6 +301,29 @@ def extract_existing_ports(
         )
 
     return None
+
+
+# Sentinel for "not found" in extract_existing_health
+_HEALTH_NOT_FOUND = object()
+
+
+def extract_existing_health(project_dir: Path) -> str | object:
+    """Extract existing health path configuration from devserver.py.
+
+    Returns:
+        - The path string (may be empty to disable)
+        - _HEALTH_NOT_FOUND sentinel if not found or file doesn't exist
+    """
+    devserver_file = project_dir / "scripts" / "devserver.py"
+    if not devserver_file.exists():
+        return _HEALTH_NOT_FOUND
+
+    content = devserver_file.read_text("UTF-8")
+    # Match HEALTH = "/path" or HEALTH = ""
+    match = re.search(r'^HEALTH\s*=\s*"([^"]*)"', content, re.MULTILINE)
+    if match:
+        return match.group(1)
+    return _HEALTH_NOT_FOUND
 
 
 def load_template(path: str) -> str:
@@ -1323,6 +1349,27 @@ def cmd_setup(args: argparse.Namespace) -> int:
         f"📡 Ports: default={default_port}, vite={vite_port}, dev={dev_port} {ports_note}"
     )
 
+    # Determine health path configuration
+    # Priority: --health argument > existing project value > default
+    if args.health is not None:
+        health = args.health
+        health_note = "(--health)" if health else "(disabled via --health)"
+    else:
+        existing_health = extract_existing_health(project_dir)
+        if existing_health is not _HEALTH_NOT_FOUND:
+            # Explicitly configured (path string, possibly empty to disable)
+            health = existing_health
+            health_note = "(kept for upgrade)"
+        else:
+            # Not found - use default
+            health = DEFAULT_HEALTH
+            health_note = "(--health to override)"
+
+    if health:
+        print(f"🏥 Health check: {health} {health_note}")
+    else:
+        print(f"🏥 Health check: disabled {health_note}")
+
     # Title for templates
     project_title = module_name.replace("_", " ").title()
 
@@ -1338,6 +1385,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         "TEMPLATE_DEFAULT_PORT": str(default_port),
         "TEMPLATE_VITE_PORT": str(vite_port),
         "TEMPLATE_DEV_PORT": str(dev_port),
+        "TEMPLATE_HEALTH": f'"{health}"',
         "ENVPREFIX": module_name.upper(),
         "PROJECT_CLI": module_name,
         "MAIN_MODULE": main_module_path,
@@ -1634,6 +1682,11 @@ Examples:
         "--ports",
         metavar="BACKEND,VITE,DEV",
         help="Port configuration as comma-separated values (default: 3100,3100,3200)",
+    )
+    parser.add_argument(
+        "--health",
+        metavar="PATH",
+        help="Health check path for devserver (default: /api/health?from=devserver.py, '' to disable)",
     )
     parser.add_argument(
         "--dry", "--dry-run", action="store_true", help="Show what would be done"
