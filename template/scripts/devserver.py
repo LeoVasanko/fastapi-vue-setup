@@ -22,6 +22,7 @@ from devutil import (  # type: ignore
 
 DEFAULT_VITE_PORT = TEMPLATE_VITE_PORT
 DEFAULT_DEV_PORT = TEMPLATE_DEV_PORT
+HEALTH = TEMPLATE_HEALTH
 
 
 async def run_devserver(
@@ -45,7 +46,7 @@ async def run_devserver(
         npm_i = await pg.spawn(*npm_install, cwd=front)
         await check_ports_free(viteurl, backurl)
         await pg.spawn(*MODULE_NAME, *(extra_args or []))
-        await pg.wait(npm_i, ready(backurl, path="/api/health?from=devserver.py"))
+        await pg.wait(npm_i, ready(backurl, path=HEALTH))
         await pg.spawn(*vite, cwd=front)
 
 
