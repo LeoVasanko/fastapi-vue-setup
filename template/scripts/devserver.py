@@ -11,7 +11,7 @@ from pathlib import Path
 
 # Import util.py from scripts/fastapi-vue (not a package, so we adjust sys.path)
 sys.path.insert(0, str(Path(__file__).with_name("fastapi-vue")))
-from devutil import (  # type: ignore
+from devutil import (
     ProcessGroup,
     check_ports_free,
     logger,
@@ -26,8 +26,11 @@ HEALTH = TEMPLATE_HEALTH
 
 
 async def run_devserver(
-    listen: str, backend: str, extra_args: list[str] | None = None
+    listen: str,
+    backend: str,
+    extra_args: list[str] | None = None,
 ) -> None:
+    """Start Vite and FastAPI dev servers with hot reload."""
     reporoot = Path(__file__).parent.parent
     front = reporoot / "frontend"
     if not (front / "package.json").exists():
@@ -50,7 +53,8 @@ async def run_devserver(
         await pg.spawn(*vite, cwd=front)
 
 
-def main():
+def main() -> None:
+    """Parse CLI arguments and run the devserver."""
     parser = argparse.ArgumentParser(
         description="Run Vite and FastAPI development servers",
         formatter_class=argparse.RawDescriptionHelpFormatter,

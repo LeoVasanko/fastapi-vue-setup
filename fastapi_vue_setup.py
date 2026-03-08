@@ -1,4 +1,4 @@
-"""FastAPI-Vue Integration Tool
+"""FastAPI-Vue Integration Tool.
 
 Create new FastAPI+Vue projects or patch existing ones with integrated build/dev systems.
 
@@ -13,8 +13,11 @@ Options:
 
 import argparse
 import ast
+import contextlib
+import hashlib
 import importlib.metadata
 import os
+import platform
 import re
 import shutil
 import subprocess
@@ -53,46 +56,59 @@ def ruff_format_content(
     temp_file = target_path.with_suffix(".new.py")
     try:
         temp_file.write_text(content, "UTF-8", newline="\n")
-        # Sort imports first
-        subprocess.run(
-            [
-                "uv",
-                "run",
-                "--with",
-                "ruff",
+        if mode == "isort":
+            # Sort imports only (ignore exit code)
+            result = subprocess.run(  # noqa: S603
+                [  # noqa: S607
+                    "ruff",
+                    "check",
+                    "--select",
+                    "I",
+                    "--fix",
+                    "--output-format=concise",
+                    str(temp_file),
+                ],
+                cwd=target_path.parent,
+                capture_output=True,
+                check=False,
+            )
+            if result.returncode != 0:
+                print(result.stdout.decode())
+            return temp_file.read_text("UTF-8")
+        # Full mode: fix all auto-fixable lint violations (ignore exit code)
+        result = subprocess.run(  # noqa: S603
+            [  # noqa: S607
                 "ruff",
                 "check",
-                "--select",
-                "I",
                 "--fix",
+                "--output-format=concise",
                 str(temp_file),
             ],
             cwd=target_path.parent,
             capture_output=True,
+            check=False,
         )
-        if mode == "isort":
-            return temp_file.read_text("UTF-8")
-        # Then format
-        result = subprocess.run(
-            ["uv", "run", "--with", "ruff", "ruff", "format", str(temp_file)],
+        if result.returncode != 0:
+            print(result.stdout.decode())
+        # Then format (ignore exit code)
+        result = subprocess.run(  # noqa: S603
+            ["ruff", "format", str(temp_file)],  # noqa: S607
             cwd=target_path.parent,
             capture_output=True,
+            check=False,
         )
-        if result.returncode == 0:
-            return temp_file.read_text("UTF-8")
-    except Exception:
+        if result.returncode != 0:
+            print(result.stdout.decode())
+        return temp_file.read_text("UTF-8")
+    except OSError:
         pass
     finally:
-        try:
+        with contextlib.suppress(Exception):
             temp_file.unlink(missing_ok=True)
-        except Exception:
-            pass
     return content
 
 
-def uv_add_packages(
-    packages: list[str], *, cwd: Path, group: str | None = None
-) -> None:
+def uv_add_packages(packages: list[str], *, cwd: Path, group: str | None = None) -> None:
     """Add packages using uv."""
     cmd = ["uv", "add", "-q", "-U"]
     if group:
@@ -100,7 +116,7 @@ def uv_add_packages(
     else:
         cmd.append("--no-sync")
     cmd.extend(packages)
-    result = subprocess.run(cmd, cwd=cwd, check=False)
+    result = subprocess.run(cmd, cwd=cwd, check=False)  # noqa: S603
     if result.returncode != 0:
         label = f" ({group})" if group else ""
         print(f"⚠️  Failed to add{label} dependencies")
@@ -126,9 +142,7 @@ PYPROJECT_ADDITIONS = {
                 "artifacts": ["MODULE_NAME/frontend-build"],
                 "targets": {
                     "sdist": {
-                        "hooks": {
-                            "custom": {"path": "scripts/fastapi-vue/build-frontend.py"}
-                        },
+                        "hooks": {"custom": {"path": "scripts/fastapi-vue/build-frontend.py"}},
                     }
                 },
                 "only-packages": True,
@@ -236,7 +250,8 @@ def parse_ports(ports_str: str | None) -> tuple[int, int, int]:
         vite = int(parts[1])
         dev = int(parts[2])
     else:
-        raise ValueError(f"Invalid ports format: {ports_str}")
+        msg = f"Invalid ports format: {ports_str}"
+        raise ValueError(msg)
 
     # Auto-adjust dev if it conflicts with vite
     if dev == vite:
@@ -263,9 +278,7 @@ def find_import_insertion_line(source: str) -> int:
     return 2 if source.startswith("#!") else 1
 
 
-def extract_existing_ports(
-    project_dir: Path, main: Path
-) -> tuple[int, int, int] | None:
+def extract_existing_ports(project_dir: Path, main: Path) -> tuple[int, int, int] | None:
     """Extract existing port configuration from project files.
 
     Returns (default, vite, dev) or None if not found.
@@ -313,6 +326,7 @@ def extract_existing_health(project_dir: Path) -> str | object:
     Returns:
         - The path string (may be empty to disable)
         - _HEALTH_NOT_FOUND sentinel if not found or file doesn't exist
+
     """
     devserver_file = project_dir / "scripts" / "devserver.py"
     if not devserver_file.exists():
@@ -346,9 +360,7 @@ def find_module_name(project_dir: Path) -> str | None:
     return None
 
 
-def find_fastapi_app(
-    module_dir: Path, project_dir: Path | None = None
-) -> tuple[Path, str] | None:
+def find_fastapi_app(module_dir: Path, project_dir: Path | None = None) -> tuple[Path, str] | None:
     """Find the FastAPI app in a module directory.
 
     Returns (file_path, app_variable_name) or None if not found.
@@ -386,9 +398,7 @@ def find_fastapi_app(
     return None
 
 
-def _find_app_via_entrypoint(
-    module_dir: Path, project_dir: Path
-) -> tuple[Path, str] | None:
+def _find_app_via_entrypoint(module_dir: Path, project_dir: Path) -> tuple[Path, str] | None:
     """Find FastAPI app by following the CLI entrypoint in pyproject.toml.
 
     If pyproject.toml has a script like `myapp = "myapp.subpkg.__main__:main"`,
@@ -400,7 +410,7 @@ def _find_app_via_entrypoint(
 
     try:
         data = tomlkit.parse(pyproject.read_text("UTF-8"))
-    except Exception:
+    except (OSError, ValueError):
         return None
 
     scripts = data.get("project", {}).get("scripts", {})
@@ -410,7 +420,7 @@ def _find_app_via_entrypoint(
     module_name = module_dir.name
 
     # Find script entries that reference this module
-    for script_name, entry in scripts.items():
+    for entry in scripts.values():
         if not isinstance(entry, str):
             continue
         # Parse entry like "module.subpkg.__main__:main"
@@ -468,7 +478,7 @@ def _add_devmode_to_main(content: str) -> str:
     insert_idx = 0
     for i, line in enumerate(lines):
         stripped = line.strip()
-        if stripped.startswith("import ") or stripped.startswith("from "):
+        if stripped.startswith(("import ", "from ")):
             insert_idx = i + 1
         elif stripped and not stripped.startswith("#"):
             break
@@ -501,7 +511,7 @@ def _find_existing_cli_module_path(project_dir: Path, module_name: str) -> str |
 
     try:
         data = tomlkit.parse(pyproject.read_text("UTF-8"))
-    except Exception:
+    except (OSError, ValueError):
         return None
 
     scripts = data.get("project", {}).get("scripts", {})
@@ -509,12 +519,11 @@ def _find_existing_cli_module_path(project_dir: Path, module_name: str) -> str |
         return None
 
     # Look for any script that references our module
-    for script_name, entry in scripts.items():
-        if isinstance(entry, str) and entry.startswith(f"{module_name}."):
+    for entry in scripts.values():
+        if isinstance(entry, str) and entry.startswith(f"{module_name}.") and ":" in entry:
             # Extract module path from "module.subpkg.__main__:main"
-            if ":" in entry:
-                module_path, _ = entry.rsplit(":", 1)
-                return module_path
+            module_path, _ = entry.rsplit(":", 1)
+            return module_path
 
     return None
 
@@ -528,7 +537,7 @@ def _follow_init_reexport(init_file: Path, subpkg_dir: Path) -> tuple[Path, str]
     """
     try:
         content = init_file.read_text("UTF-8")
-    except Exception:
+    except OSError:
         return None
 
     # Look for: from .module import app (or similar variable names)
@@ -562,7 +571,7 @@ def _find_app_in_file(path: Path) -> str | None:
     """Find FastAPI app variable name in a file."""
     try:
         content = path.read_text("UTF-8")
-    except Exception:
+    except OSError:
         return None
 
     # Look for FastAPI() instantiation patterns
@@ -574,17 +583,15 @@ def _find_app_in_file(path: Path) -> str | None:
     return None
 
 
-def render_template(template: str, **kwargs) -> str:
-    """Simple template rendering replacing KEY with value."""
+def render_template(template: str, **kwargs: str) -> str:
+    """Render a template, replacing KEY with value."""
     result = template
     for key, value in kwargs.items():
         result = result.replace(key, value)
     return result
 
 
-def patch_app_file(
-    path: Path, main_module_path: str, app_var: str, dry: bool = False
-) -> bool:
+def patch_app_file(path: Path, main_module_path: str, app_var: str, *, dry: bool = False) -> bool:
     """Patch an existing app.py with frontend integration.
 
     Inserts imports at top (ruff will sort them), route at bottom,
@@ -628,9 +635,7 @@ def patch_app_file(
             content = content.rstrip("\n") + "\n" + import_text
         else:
             # Insert at the found position
-            content = (
-                "".join(lines[:insert_idx]) + import_text + "".join(lines[insert_idx:])
-            )
+            content = "".join(lines[:insert_idx]) + import_text + "".join(lines[insert_idx:])
 
     # Insert FRONTEND_BLOCK after last import (only if Frontend wasn't already there)
     if not has_frontend:
@@ -638,7 +643,7 @@ def patch_app_file(
         last_import_idx = 0
         for i, line in enumerate(lines):
             stripped = line.strip()
-            if stripped.startswith("import ") or stripped.startswith("from "):
+            if stripped.startswith(("import ", "from ")):
                 last_import_idx = i
             elif stripped and not stripped.startswith("#") and last_import_idx > 0:
                 break
@@ -649,9 +654,7 @@ def patch_app_file(
     if route_line not in content:
         lines = content.split("\n")
         lines.append("")
-        lines.append(
-            "# Serve the Vue frontend (needs to be last if SPA catch-all is used)"
-        )
+        lines.append("# Serve the Vue frontend (needs to be last if SPA catch-all is used)")
         lines.append(route_line)
         content = "\n".join(lines)
 
@@ -662,10 +665,7 @@ def patch_app_file(
             args = match.group(2)
             if "debug" not in args:
                 # Add debug=DEVMODE as last argument
-                if args.strip():
-                    new_args = f"{args}, debug=DEVMODE"
-                else:
-                    new_args = "debug=DEVMODE"
+                new_args = f"{args}, debug=DEVMODE" if args.strip() else "debug=DEVMODE"
                 content = (
                     content[: match.start()]
                     + match.group(1)
@@ -701,11 +701,7 @@ def patch_app_file(
             if insert_idx >= len(lines):
                 content = content.rstrip("\n") + "\n" + import_text
             else:
-                content = (
-                    "".join(lines[:insert_idx])
-                    + import_text
-                    + "".join(lines[insert_idx:])
-                )
+                content = "".join(lines[:insert_idx]) + import_text + "".join(lines[insert_idx:])
 
         # Insert lifespan block before the FastAPI() call
         fastapi_line_pattern = r"^(\w+\s*=\s*FastAPI\s*\()"
@@ -723,10 +719,7 @@ def patch_app_file(
         fastapi_match = re.search(fastapi_pattern, content, re.DOTALL)
         if fastapi_match and "lifespan" not in fastapi_match.group(2):
             args = fastapi_match.group(2)
-            if args.strip():
-                new_args = f"{args}, lifespan=lifespan"
-            else:
-                new_args = "lifespan=lifespan"
+            new_args = f"{args}, lifespan=lifespan" if args.strip() else "lifespan=lifespan"
             content = (
                 content[: fastapi_match.start()]
                 + fastapi_match.group(1)
@@ -770,7 +763,7 @@ def patch_app_file(
 
 def patch_vite_config(
     path: Path,
-    module_name: str,
+    *,
     dry: bool = False,
 ) -> bool:
     """Patch an existing vite.config.js/ts by adding fastapi-vue plugin.
@@ -801,15 +794,13 @@ def patch_vite_config(
         # Insert after the last import line before non-import content
         if not import_inserted:
             stripped = line.strip()
-            if stripped.startswith("import ") or stripped.startswith("from "):
-                # Check if next line is not an import
-                if i + 1 < len(lines):
-                    next_stripped = lines[i + 1].strip()
-                    if not next_stripped.startswith(
-                        "import "
-                    ) and not next_stripped.startswith("from "):
-                        new_lines.append(import_line)
-                        import_inserted = True
+            if stripped.startswith(("import ", "from ")) and i + 1 < len(lines):
+                next_stripped = lines[i + 1].strip()
+                if not next_stripped.startswith("import ") and not next_stripped.startswith(
+                    "from "
+                ):
+                    new_lines.append(import_line)
+                    import_inserted = True
 
     if not import_inserted:
         # No imports found, add at top
@@ -842,7 +833,7 @@ def patch_vite_config(
     return True
 
 
-def patch_frontend_health_check(frontend_dir: Path, dry: bool = False) -> bool:
+def patch_frontend_health_check(frontend_dir: Path, *, dry: bool = False) -> bool:
     """Patch Vue app to include FastAPI backend health check.
 
     Tries HelloWorld.vue first (full demo), then falls back to App.vue (minimal).
@@ -884,9 +875,7 @@ def patch_frontend_health_check(frontend_dir: Path, dry: bool = False) -> bool:
     is_typescript = 'lang="ts"' in content
 
     # Build the script content based on JS/TS
-    script_addition = (
-        TS_HEALTH_CHECK_SCRIPT if is_typescript else JS_HEALTH_CHECK_SCRIPT
-    )
+    script_addition = TS_HEALTH_CHECK_SCRIPT if is_typescript else JS_HEALTH_CHECK_SCRIPT
 
     # Insert script addition before </script>
     script_end_match = re.search(r"</script>", content)
@@ -904,9 +893,7 @@ def patch_frontend_health_check(frontend_dir: Path, dry: bool = False) -> bool:
         # Insert before closing </h3>
         h3_close = content.find("    </h3>")
         if h3_close == -1:
-            print(
-                f"⚠️  Skipping {target_file} (no </h3> tag found for status insertion)"
-            )
+            print(f"⚠️  Skipping {target_file} (no </h3> tag found for status insertion)")
             return False
         before, after = content[:h3_close], content[h3_close:]
         content = f"{before}{indent(STATUS_SPAN_TEMPLATE, '  ')}{after}"
@@ -944,12 +931,10 @@ def patch_frontend_health_check(frontend_dir: Path, dry: bool = False) -> bool:
 
 # SHA-256 of old vite-plugin-fastapi.js (before auto-upgrade marker was added)
 # with module name replaced by MODULE_NAME in the outDir path
-_OLD_VITE_PLUGIN_SHA256 = (
-    "93713e879c15a25c750a70ce1de684adeaf11b0c723c38da56e5e7ba207f6632"
-)
+_OLD_VITE_PLUGIN_SHA256 = "93713e879c15a25c750a70ce1de684adeaf11b0c723c38da56e5e7ba207f6632"
 
 
-def _upgrade_old_vite_plugin(path: Path, module_name: str, dry: bool = False) -> None:
+def _upgrade_old_vite_plugin(path: Path, module_name: str, *, dry: bool = False) -> None:
     """Remove old vite-plugin-fastapi.js that lacks auto-upgrade marker.
 
     Old versions didn't have the upgrade marker, so write_file skips them as
@@ -961,7 +946,6 @@ def _upgrade_old_vite_plugin(path: Path, module_name: str, dry: bool = False) ->
     content = path.read_text("UTF-8")
     if UPGRADE_MARKER in content:
         return  # Already new format, write_file handles it
-    import hashlib
 
     normalized = content.replace(
         f"../{module_name}/frontend-build", "../MODULE_NAME/frontend-build"
@@ -983,6 +967,7 @@ _new_files_written: list[tuple[Path, Path]] = []
 def write_file(
     path: Path,
     content: str,
+    *,
     overwrite: bool = True,
     dry: bool = False,
     executable: bool = False,
@@ -1020,7 +1005,7 @@ def write_file(
             if fallback_path is not None:
                 # Write to fallback path instead
                 return _write_fallback_file(
-                    path, fallback_path, content, dry, executable
+                    path, fallback_path, content, dry=dry, executable=executable
                 )
             print(f"ℹ️  Skipping {path} (customized by user)")
             return False
@@ -1043,6 +1028,7 @@ def _write_fallback_file(
     original_path: Path,
     fallback_path: Path,
     content: str,
+    *,
     dry: bool,
     executable: bool,
 ) -> bool:
@@ -1100,8 +1086,6 @@ def merge_pyproject(
     if "requires-python" in data["project"]:
         req = data["project"]["requires-python"]
         # Parse minimum version from strings like ">=3.10" or ">=3.9,<4"
-        import re
-
         match = re.search(r">=\s*(\d+)\.(\d+)", req)
         if match:
             major, minor = int(match.group(1)), int(match.group(2))
@@ -1147,9 +1131,9 @@ def merge_pyproject(
     if "custom" not in hatch_build["targets"]["sdist"]["hooks"]:
         hatch_build["targets"]["sdist"]["hooks"]["custom"] = tomlkit.table()
     if "path" not in hatch_build["targets"]["sdist"]["hooks"]["custom"]:
-        hatch_build["targets"]["sdist"]["hooks"]["custom"]["path"] = hatch_additions[
-            "targets"
-        ]["sdist"]["hooks"]["custom"]["path"]
+        hatch_build["targets"]["sdist"]["hooks"]["custom"]["path"] = hatch_additions["targets"][
+            "sdist"
+        ]["hooks"]["custom"]["path"]
 
     return data
 
@@ -1193,7 +1177,7 @@ def find_js_runtime() -> tuple[str, str] | None:
     return None
 
 
-def ensure_python_project(project_dir: Path, dry: bool = False) -> bool:
+def ensure_python_project(project_dir: Path, *, dry: bool = False) -> bool:
     """Ensure pyproject.toml exists, run uv init if needed."""
     pyproject = project_dir / "pyproject.toml"
     if pyproject.exists():
@@ -1205,7 +1189,7 @@ def ensure_python_project(project_dir: Path, dry: bool = False) -> bool:
 
     print("📦 No pyproject.toml found, initializing Python project...")
     print(">>> uv init")
-    result = subprocess.run(["uv", "init", str(project_dir)], check=False)
+    result = subprocess.run(["uv", "init", str(project_dir)], check=False)  # noqa: S603, S607
     if result.returncode != 0:
         print("❌ uv init failed")
         return False
@@ -1219,7 +1203,7 @@ def ensure_python_project(project_dir: Path, dry: bool = False) -> bool:
     return True
 
 
-def ensure_frontend(project_dir: Path, dry: bool = False) -> bool:
+def ensure_frontend(project_dir: Path, *, dry: bool = False) -> bool:
     """Ensure frontend directory exists with a Vue project, run create-vue if needed."""
     frontend_dir = project_dir / "frontend"
     package_json = frontend_dir / "package.json"
@@ -1251,11 +1235,7 @@ def ensure_frontend(project_dir: Path, dry: bool = False) -> bool:
     print(f">>> {' '.join(create_cmd)}")
     print("(Follow the prompts to configure your Vue app)")
     print()
-    result = subprocess.run(
-        create_cmd,
-        cwd=project_dir,
-        check=False,
-    )
+    result = subprocess.run(create_cmd, cwd=project_dir, check=False)  # noqa: S603
     if result.returncode != 0:
         print("❌ create-vue failed")
         return False
@@ -1277,10 +1257,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
     project_path = Path(args.project_dir)
 
     # Handle both "." and "/path/to/project"
-    if project_path.is_absolute():
-        project_dir = project_path
-    else:
-        project_dir = Path.cwd() / project_path
+    project_dir = project_path if project_path.is_absolute() else Path.cwd() / project_path
 
     project_dir = project_dir.resolve()
     dry = args.dry
@@ -1300,11 +1277,11 @@ def cmd_setup(args: argparse.Namespace) -> int:
     print(f"🔧 Setting up project: {project_dir}")
 
     # Step 1: Ensure frontend exists (do this first so cancellation doesn't leave partial setup)
-    if not ensure_frontend(project_dir, dry):
+    if not ensure_frontend(project_dir, dry=dry):
         return 1
 
     # Step 2: Ensure Python project exists
-    if not ensure_python_project(project_dir, dry):
+    if not ensure_python_project(project_dir, dry=dry):
         return 1
 
     # Detect module name
@@ -1345,9 +1322,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
             default_port, vite_port, dev_port = DEFAULT_PORTS
             ports_note = "(--ports to override)"
 
-    print(
-        f"📡 Ports: default={default_port}, vite={vite_port}, dev={dev_port} {ports_note}"
-    )
+    print(f"📡 Ports: default={default_port}, vite={vite_port}, dev={dev_port} {ports_note}")
 
     # Determine health path configuration
     # Priority: --health argument > existing project value > default
@@ -1374,9 +1349,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
     project_title = module_name.replace("_", " ").title()
 
     # Find existing FastAPI app
-    app_info = (
-        find_fastapi_app(module_dir, project_dir) if module_dir.exists() else None
-    )
+    app_info = find_fastapi_app(module_dir, project_dir) if module_dir.exists() else None
 
     # Template variables
     tpl_vars = {
@@ -1531,7 +1504,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         # Install the vite plugin file (always update)
         plugin_file = frontend_dir / "vite-plugin-fastapi.js"
         # Upgrade old plugin versions that lack the auto-upgrade marker
-        _upgrade_old_vite_plugin(plugin_file, module_name, dry)
+        _upgrade_old_vite_plugin(plugin_file, module_name, dry=dry)
         template = load_template("frontend/vite-plugin-fastapi.js")
         content = render_template(template, **tpl_vars)
         write_file(plugin_file, content, overwrite=True, dry=dry)
@@ -1541,15 +1514,15 @@ def cmd_setup(args: argparse.Namespace) -> int:
         vite_config_js = frontend_dir / "vite.config.js"
 
         if vite_config_ts.exists():
-            patch_vite_config(vite_config_ts, module_name, dry)
+            patch_vite_config(vite_config_ts, dry=dry)
         elif vite_config_js.exists():
-            patch_vite_config(vite_config_js, module_name, dry)
+            patch_vite_config(vite_config_js, dry=dry)
         else:
             print("⚠️  No vite.config.ts or vite.config.js found in frontend/")
             print("   Run create-vue first to generate a Vite config to patch.")
 
         # Patch Vue app with backend health check
-        patch_frontend_health_check(frontend_dir, dry)
+        patch_frontend_health_check(frontend_dir, dry=dry)
 
     # === Update pyproject.toml ===
     pyproject_path = project_dir / "pyproject.toml"
@@ -1588,9 +1561,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         else:
             nl = b"\r\n" if b"\r\n" in gitignore_content else b"\n"
             suffix = b"" if gitignore_content.endswith(nl) else nl
-            gitignore_path.write_bytes(
-                gitignore_content + suffix + gitignore_entry.encode() + nl
-            )
+            gitignore_path.write_bytes(gitignore_content + suffix + gitignore_entry.encode() + nl)
             print(f"✅ Added {gitignore_entry} to .gitignore")
     elif dry:
         print(f"✅ Would create .gitignore with {gitignore_entry}")
@@ -1610,12 +1581,12 @@ def cmd_setup(args: argparse.Namespace) -> int:
     print_boxed("Setup complete!")
 
     # Show cd command only if project is not in current directory
-    cd_cmd = "" if project_dir == Path.cwd() else f"cd {project_dir}; "
+    cd_cmd = "" if project_dir == Path.cwd() else f"cd {project_dir} && "
     script_name = module_name.replace("_", "-")
 
-    message = SETUP_COMPLETE_MESSAGE.replace("CD_CMD", cd_cmd).replace(
-        "SCRIPT_NAME", script_name
-    )
+    message = SETUP_COMPLETE_MESSAGE.replace("CD_CMD", cd_cmd).replace("SCRIPT_NAME", script_name)
+    if platform.system() == "Windows":
+        message = message.replace(" && ", "; ")
     print(message)
 
     # Show merge note if any .new.py files were written
@@ -1640,25 +1611,19 @@ def cmd_setup(args: argparse.Namespace) -> int:
 
 def is_uninitialized_folder(path: Path) -> bool:
     """Check if a folder appears to be completely uninitialized."""
-    return (
-        not (path / "pyproject.toml").exists() and not (path / "package.json").exists()
-    )
+    return not (path / "pyproject.toml").exists() and not (path / "package.json").exists()
 
 
 def is_already_patched(path: Path) -> bool:
     """Check if a folder has already been patched by fastapi-vue-setup."""
-    # Check for our scripts directory
-    if (path / "scripts" / "fastapi-vue").exists():
-        return True
-
-    # Check for vite plugin in frontend
-    if (path / "frontend" / "vite-plugin-fastapi.js").exists():
-        return True
-
-    return False
+    # Check for our scripts directory for vite plugin in frontend
+    scriptdir = path / "scripts" / "fastapi-vue"
+    viteplugin = path / "frontend" / "vite-plugin-fastapi.js"
+    return scriptdir.exists() or viteplugin.exists()
 
 
 def main() -> int:
+    """CLI entry point."""
     parser = argparse.ArgumentParser(
         description=f"fastapi-vue-setup {version} - FastAPI + Vue project setup tool",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -1686,11 +1651,9 @@ Examples:
     parser.add_argument(
         "--health",
         metavar="PATH",
-        help="Health check path for devserver (default: /api/health?from=devserver.py, '' to disable)",
+        help='Health check endpoint (disable waiting for backend startup by setting "")',
     )
-    parser.add_argument(
-        "--dry", "--dry-run", action="store_true", help="Show what would be done"
-    )
+    parser.add_argument("--dry", "--dry-run", action="store_true", help="Show what would be done")
 
     args = parser.parse_args()
 

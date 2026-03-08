@@ -1,4 +1,6 @@
 # auto-upgrade@fastapi-vue-setup - remove this if you modify this file
+"""Command-line entry point for running the backend server."""
+
 import argparse
 import os
 
@@ -8,7 +10,8 @@ DEFAULT_PORT = TEMPLATE_DEFAULT_PORT
 DEVMODE = os.getenv("ENVPREFIX_DEV") == "1"
 
 
-def main():
+def main() -> None:
+    """Run the backend server with optional arguments."""
     parser = argparse.ArgumentParser(description="Run the MODULE_NAME server.")
     parser.add_argument(
         "-l",
