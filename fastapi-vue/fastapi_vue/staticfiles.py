@@ -220,7 +220,7 @@ class Frontend:
         if self._catch_all:
             # Register catch-all immediately (works without load)
             path = self._mount_path + "{path:path}"
-            app.api_route(path, methods=["GET", "HEAD"], name="frontend")(self.handle)
+            app.api_route(path, methods=["GET", "HEAD"], name="frontend", response_model=None)(self.handle)
 
     def _register_routes(self) -> None:
         """Register individual routes for each loaded file (non-catch_all mode)."""
