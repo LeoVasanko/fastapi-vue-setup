@@ -1,27 +1,33 @@
+# ruff: noqa: INP001
 """Utilities meant for devserver script, used only in source repository with dev deps."""
 
 import asyncio
 import subprocess
 import sys
-from collections.abc import Coroutine
 from contextlib import suppress
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, Self
 
 import httpx
 from buildutil import find_dev_tool, find_install_tool, logger
 from fastapi_vue.hostutil import parse_endpoint
 
+if TYPE_CHECKING:
+    from collections.abc import Coroutine
+
 
 class ProcessGroup:
     """Manage async subprocesses with automatic cleanup, like TaskGroup for processes."""
 
-    def __init__(self):
+    def __init__(self) -> None:
+        """Initialize empty process tracking."""
         self._procs: list[asyncio.subprocess.Process] = []
         self._cmds: dict[int, str] = {}  # pid -> command name
 
     async def spawn(
-        self, *cmd: str, cwd: str | None = None
+        self,
+        *cmd: str,
+        cwd: str | None = None,
     ) -> asyncio.subprocess.Process:
         """Spawn a subprocess and track it."""
         cmd_name = Path(cmd[0]).stem
@@ -32,7 +38,8 @@ class ProcessGroup:
         return proc
 
     async def wait(
-        self, *waitables: "asyncio.subprocess.Process | Coroutine[Any, Any, Any]"
+        self,
+        *waitables: "asyncio.subprocess.Process | Coroutine[Any, Any, Any]",
     ) -> None:
         """Wait for processes/coroutines to complete, raise SystemExit on failure."""
 
@@ -43,8 +50,7 @@ class ProcessGroup:
                 raise subprocess.CalledProcessError(returncode, cmd_name)
 
         tasks = [
-            wait_proc(w) if isinstance(w, asyncio.subprocess.Process) else w
-            for w in waitables
+            wait_proc(w) if isinstance(w, asyncio.subprocess.Process) else w for w in waitables
         ]
         try:
             await asyncio.gather(*tasks)
@@ -52,14 +58,15 @@ class ProcessGroup:
             logger.warning("%s failed with exit status %d", e.cmd, e.returncode)
             raise SystemExit(1) from None
 
-    async def __aenter__(self):
+    async def __aenter__(self) -> Self:
+        """Enter the async context manager."""
         return self
 
-    async def __aexit__(self, exc_type, *_):
+    async def __aexit__(self, exc_type: type[BaseException] | None, *_: object) -> None:
         """Wait for one process to exit, terminate others, then wait for all."""
         await self._cleanup(immediate=exc_type is not None)
 
-    async def _cleanup(self, immediate: bool = False):
+    async def _cleanup(self, *, immediate: bool = False) -> None:
         running = [p for p in self._procs if p.returncode is None]
         if not running:
             return
@@ -87,7 +94,7 @@ class ProcessGroup:
                         asyncio.wait_for(
                             asyncio.gather(*[p.wait() for p in still_running]),
                             timeout=10,
-                        )
+                        ),
                     )
                 except TimeoutError:
                     for p in self._procs:
@@ -111,7 +118,7 @@ async def check_ports_free(*urls: str) -> None:
         await asyncio.gather(*[check(client, url) for url in urls])
 
 
-async def ready(url: str, path: str = "", max_attempts=50) -> None:
+async def ready(url: str, path: str = "", max_attempts: int = 50) -> None:
     """Wait for the server to be ready by polling an endpoint.
 
     Use empty path to disable the check and make this return immediately.
@@ -124,17 +131,19 @@ async def ready(url: str, path: str = "", max_attempts=50) -> None:
         for attempt in range(max_attempts):
             try:
                 await client.get(f"{url}{path}", timeout=1.0)
-                logger.info("✓ Backend ready!")
-                return
             except httpx.RequestError:
                 if attempt == max_attempts - 1:
                     logger.warning("Backend didn't start in time")
-                    raise SystemExit(1)
+                    raise SystemExit(1) from None
                 await asyncio.sleep(0.1)
+            else:
+                logger.info("✓ Backend ready!")
+                return
 
 
 def setup_vite(
-    endpoint: str, default_port: int = 5173
+    endpoint: str,
+    default_port: int = 5173,
 ) -> tuple[str, list[str], list[str]]:
     """Parse frontend endpoint and build commands.
 
@@ -160,7 +169,9 @@ def setup_vite(
 
 
 def setup_fastapi(
-    endpoint: str, module: str, default_port: int = 8000
+    endpoint: str,
+    module: str,
+    default_port: int = 8000,
 ) -> tuple[str, list[str]]:
     """Parse backend endpoint and build uvicorn command.
 
@@ -175,7 +186,7 @@ def setup_fastapi(
 
     host = endpoints[0]["host"]
     port = endpoints[0]["port"]
-    reload_dir = module.split(".")[0]  # Don't reload on frontend changes
+    reload_dir = module.split(".", maxsplit=1)[0]  # Don't reload on frontend changes
 
     cmd = [
         sys.executable,
@@ -192,7 +203,9 @@ def setup_fastapi(
 
 
 def setup_cli(
-    cli: str, endpoint: str, default_port: int = 8000
+    cli: str,
+    endpoint: str,
+    default_port: int = 8000,
 ) -> tuple[str, list[str]]:
     """Parse backend endpoint and build CLI command.
 

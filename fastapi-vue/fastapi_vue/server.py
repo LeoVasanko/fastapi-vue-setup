@@ -1,7 +1,10 @@
+"""Uvicorn server runner with multi-endpoint support."""
+
 import asyncio
 import logging
 import os
 from contextlib import suppress
+from typing import Any
 
 import uvicorn
 from uvicorn import Config, Server
@@ -18,8 +21,8 @@ def run(
     default_port: int = 8000,
     reload: bool = False,
     workers: int | None = None,
-    **uvicorn_config,
-):
+    **uvicorn_config: Any,  # noqa: ANN401
+) -> None:
     """Run uvicorn server(s) for the given app.
 
     Args:
@@ -29,10 +32,12 @@ def run(
         reload: Enable auto-reload (requires uvicorn.run, single endpoint only).
         workers: Number of worker processes (requires uvicorn.run, single endpoint only).
         **uvicorn_config: Additional uvicorn config options (overrides all other settings).
+
     """
     endpoints = parse_endpoints(listen, default_port)
     if not endpoints:
-        raise ValueError("No endpoints to serve; check listen configuration")
+        msg = "No endpoints to serve; check listen configuration"
+        raise ValueError(msg)
 
     conf: dict[str, object] = {"app": app, "reload": reload, "workers": workers}
     proxy = os.getenv("FORWARDED_ALLOW_IPS", "127.0.0.1,::1")
@@ -48,7 +53,7 @@ def run(
             asyncio.run(serve(endpoints, **conf))
 
 
-async def serve(endpoints: list[dict], **kwargs) -> None:
+async def serve(endpoints: list[dict], **kwargs: Any) -> None:  # noqa: ANN401
     """Serve the given endpoints in current process/loop. Does not spawn extra processes."""
     forbidden = {"reload", "workers"} & {k for k, v in kwargs.items() if v}
     if forbidden:
@@ -59,13 +64,10 @@ async def serve(endpoints: list[dict], **kwargs) -> None:
     await asyncio.gather(*(Server(Config(**kwargs, **ep)).serve() for ep in endpoints))
 
 
-def serve_multiprocess(endpoints: list[dict], **kwargs) -> None:
+def serve_multiprocess(endpoints: list[dict], **kwargs: Any) -> None:  # noqa: ANN401
     """Serve using uvicorn.run() for reload/workers support. Only first endpoint is used."""
     if len(endpoints) > 1:
-        eps = [
-            ep["uds"] if "uds" in ep else f"{ep['host']}:{ep['port']}"
-            for ep in endpoints
-        ]
+        eps = [ep["uds"] if "uds" in ep else f"{ep['host']}:{ep['port']}" for ep in endpoints]
         logger.warning(
             "Current mode supports only one endpoint. Listening: %s, skipped: %s",
             eps[0],

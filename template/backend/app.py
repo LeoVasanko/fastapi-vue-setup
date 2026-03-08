@@ -1,3 +1,6 @@
+"""FastAPI application module with Vue frontend integration."""
+
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -10,7 +13,7 @@ frontend = Frontend(Path(__file__).with_name("frontend-build"))
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     """Manage app startup and shutdown resources."""
     await frontend.load()
     yield
@@ -24,7 +27,8 @@ app = FastAPI(title="PROJECT_TITLE", debug=DEVMODE, lifespan=lifespan)
 
 # Health check endpoint for the Vue demo app to verify the backend is running
 @app.get("/api/health")
-async def health_check():
+async def health_check() -> dict[str, str]:
+    """Return backend status for health monitoring."""
     return {"status": "ok"}
 
 

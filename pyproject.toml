@@ -31,3 +31,20 @@ dev = ["ruff", "fastapi-vue"]
 
 [tool.uv.sources]
 fastapi-vue = { path = "fastapi-vue", editable = true }
+
+[tool.uv.workspace]
+members = [
+    "f",
+]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = ["D203", "D213", "COM812"]  # Conflicting with D211, D212 and formatting
+
+[tool.ruff.lint.per-file-ignores]
+"template/**" = ["F821"]  # Undefined names are template placeholders
+"template/scripts/devserver.py" = ["N806"]  # MODULE_NAME is a template variable
+"fastapi_vue_setup.py" = ["PLR", "C901", "T201", "RUF001"]

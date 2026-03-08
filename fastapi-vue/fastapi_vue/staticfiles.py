@@ -25,7 +25,7 @@ __all__ = ["Frontend"]
 
 
 class Assets:
-    """Default cached value to /assets/"""
+    """Default cached value to /assets/."""
 
     @staticmethod
     def parse(cached: str | list[str] | Assets) -> list[str]:
@@ -37,7 +37,8 @@ class Assets:
             case list():
                 return cached
             case _:
-                raise ValueError(f"Invalid cached value: {cached!r}")
+                msg = f"Invalid cached value: {cached!r}"
+                raise ValueError(msg)
 
 
 class Frontend:
@@ -55,27 +56,29 @@ class Frontend:
         index: Name of the index file (default: "index.html")
         spa: Enable SPA mode - serve index.html for unknown routes (default: False)
         cached: Path prefixes that are immutable (default: "/assets/")
-        favicon: May use wildcards of full path. E.g. /assets/logo*.png matches logo.hash.png created by Vite
+        favicon: Wildcard path to favicon. E.g. /assets/logo*.png matches Vite output
         zstdlevel: Zstd compression level (default: 18)
+
     """
 
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         directory: Path | str,
         *,
         index: str = "index.html",
         spa: bool = False,
         catch_all: bool | None = None,
-        cached: str | list[str] | Assets = Assets(),
+        cached: str | list[str] | Assets | None = None,
         favicon: str | None = None,
         zstdlevel: int = 18,
     ) -> None:
+        """Initialize Frontend with given configuration."""
         self.www: dict[str, tuple[bytes, bytes | None, dict]] = {}
         self.base: Path = Path(directory)
         self.index = index
         self.spa = spa
         self._catch_all = spa if catch_all is None else catch_all
-        self.cached_paths = Assets.parse(cached)
+        self.cached_paths = Assets.parse(cached if cached is not None else Assets())
         self.zstdlevel = zstdlevel
         self.favicon = favicon
         self._app: FastAPI | None = None
@@ -107,11 +110,12 @@ class Frontend:
                 paths.add("/favicon.ico")
         return paths
 
-    def _load(self):
+    def _load(self) -> dict[str, tuple[bytes, bytes | None, dict]]:
         """Load static files from disk with compression."""
         www: dict[str, tuple[bytes, bytes | None, dict]] = {}
         if not self.base.exists():
-            raise ValueError(f"Frontend folder {self.base} not found (try uv build)")
+            msg = f"Frontend folder {self.base} not found (try uv build)"
+            raise ValueError(msg)
         paths = [PurePath()]
         while paths:
             current = self.base / paths.pop(0)
@@ -133,21 +137,18 @@ class Frontend:
                 headers = {
                     "etag": f'"{etag}"',
                     "last-modified": format_date_time(mtime),
-                    "cache-control": (
-                        "max-age=31536000, immutable" if cached else "no-cache"
-                    ),
+                    "cache-control": ("max-age=31536000, immutable" if cached else "no-cache"),
                     "content-type": mime,
                 }
                 zstd = ZstdCompressor(self.zstdlevel).compress(data)
                 if len(zstd) >= len(data):
                     zstd = None
                 www[name] = data, zstd, headers
-        if self.favicon:
-            if m := fnmatch.filter(www, self.favicon):
-                data, zstd, headers = www[m[0]]
-                if "immutable" in headers.get("cache-control", ""):
-                    headers = {**headers, "cache-control": "max-age=86400"}
-                www["/favicon.ico"] = data, zstd, headers
+        if self.favicon and (m := fnmatch.filter(www, self.favicon)):
+            data, zstd, headers = www[m[0]]
+            if "immutable" in headers.get("cache-control", ""):
+                headers = {**headers, "cache-control": "max-age=86400"}
+            www["/favicon.ico"] = data, zstd, headers
         if not www:
             msg = "Frontend files missing, check your installation.\n"
             www["/"] = (
@@ -161,7 +162,7 @@ class Frontend:
             )
         return www
 
-    async def load(self, *, debug: bool | None = None, log: bool = True):
+    async def load(self, *, debug: bool | None = None, log: bool = True) -> None:
         """Load or reload static files from disk.
 
         In debug mode, returns 409 instead of files (avoid accidental use of stale builds)
@@ -187,13 +188,19 @@ class Frontend:
         ratio = comp / raw * 100 if raw else 100.0
         if log and self.www:
             logger.info(
-                f"{self.base.name}: {len(self.www)} files in {1000 * duration:.1f} ms | "
-                f"zstd {len(compfiles)} files {1e-6 * raw:.2f}->{1e-6 * comp:.2f} MB ({ratio:.0f} %)"
+                "%s: %d files in %.1f ms | zstd %d files %.2f->%.2f MB (%.0f %%)",
+                self.base.name,
+                len(self.www),
+                1000 * duration,
+                len(compfiles),
+                1e-6 * raw,
+                1e-6 * comp,
+                ratio,
             )
         if self.favicon and "/favicon.ico" not in self.www:
             logger.warning("Favicon not found: %s", self.favicon)
 
-    def route(self, app: FastAPI, mount_path="/"):
+    def route(self, app: FastAPI, mount_path: str = "/") -> None:
         """Register frontend routes with a FastAPI app.
 
         In SPA/catch-all mode, this must only be called only after all other routes.
@@ -204,6 +211,7 @@ class Frontend:
         Args:
             app: FastAPI application instance
             mount_path: Path where the frontend should be mounted (default: "/")
+
         """
         self._app = app
         self._mount_path = mount_path.rstrip("/")
@@ -214,7 +222,7 @@ class Frontend:
             path = self._mount_path + "{path:path}"
             app.api_route(path, methods=["GET", "HEAD"], name="frontend")(self.handle)
 
-    def _register_routes(self):
+    def _register_routes(self) -> None:
         """Register individual routes for each loaded file (non-catch_all mode)."""
         if self._app is None or self._catch_all:
             return
@@ -240,18 +248,19 @@ class Frontend:
             for p in paths
         ]
 
-    def _respond(self, request: Request, name: str):
+    def _respond(self, request: Request, name: str) -> Response:
         """Serve a static file with ETag and compression support."""
         data, zstd, headers = self.www[name]
         if request.headers.get("if-none-match") == headers["etag"]:
             return Response(status_code=304, headers=headers)
         if zstd and "zstd" in request.headers.get("accept-encoding", ""):
             return Response(
-                content=zstd, headers={**headers, "content-encoding": "zstd"}
+                content=zstd,
+                headers={**headers, "content-encoding": "zstd"},
             )
         return Response(content=data, headers=headers)
 
-    def handle(self, request: Request, path: str):
+    def handle(self, request: Request, path: str) -> Response | RedirectResponse:
         """SPA catch-all handler with directory redirects and fallback to index."""
         name = path.removesuffix(self.index)
         debug = getattr(self._app, "debug", False)
@@ -271,11 +280,9 @@ class Frontend:
         return (_devmode_respond if debug else self._respond)(request, name)
 
 
-def _devmode_respond(request: Request, name=""):
+def _devmode_respond(_request: Request, _name: str = "") -> JSONResponse:
     """Return error response directing to Vite server."""
     return JSONResponse(
         status_code=409,
-        content={
-            "detail": "[devmode] Not serving frontend files here. Should you connect to Vite instead?"
-        },
+        content={"detail": "[devmode] Use Vite devserver instead."},
     )
