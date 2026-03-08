@@ -84,7 +84,7 @@ my-app/
 └── scripts/
     ├── devserver.py             # Run Vite and FastAPI together in dev mode
     └── fastapi-vue/             # Dev utilities (only on the source tree)
-        ├── build-frontend.py
+        ├── buildhook.py
         ├── buildutil.py
         └── devutil.py
 ```

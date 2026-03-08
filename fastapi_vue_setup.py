@@ -142,7 +142,7 @@ PYPROJECT_ADDITIONS = {
                 "artifacts": ["MODULE_NAME/frontend-build"],
                 "targets": {
                     "sdist": {
-                        "hooks": {"custom": {"path": "scripts/fastapi-vue/build-frontend.py"}},
+                        "hooks": {"custom": {"path": "scripts/fastapi-vue/buildhook.py"}},
                     }
                 },
                 "only-packages": True,
@@ -150,6 +150,10 @@ PYPROJECT_ADDITIONS = {
         }
     },
 }
+
+# Old build hook path that should be migrated to the new name
+OLD_BUILD_HOOK_PATH = "scripts/fastapi-vue/build-frontend.py"
+NEW_BUILD_HOOK_PATH = "scripts/fastapi-vue/buildhook.py"
 
 
 # Frontend instantiation block for patching existing apps
@@ -1134,6 +1138,9 @@ def merge_pyproject(
         hatch_build["targets"]["sdist"]["hooks"]["custom"]["path"] = hatch_additions["targets"][
             "sdist"
         ]["hooks"]["custom"]["path"]
+    elif hatch_build["targets"]["sdist"]["hooks"]["custom"]["path"] == OLD_BUILD_HOOK_PATH:
+        # Migrate old build hook path to new name
+        hatch_build["targets"]["sdist"]["hooks"]["custom"]["path"] = NEW_BUILD_HOOK_PATH
 
     return data
 
@@ -1397,9 +1404,27 @@ def cmd_setup(args: argparse.Namespace) -> int:
             obsolete_util.unlink()
             print(f"🗑️  Removed obsolete {obsolete_util}")
 
+    # Remove obsolete build-frontend.py if present (renamed to buildhook.py)
+    obsolete_build_hook = fastapi_vue_scripts / "build-frontend.py"
+    if obsolete_build_hook.exists():
+        if dry:
+            print(f"🗑️ Would remove obsolete {obsolete_build_hook}")
+        else:
+            obsolete_build_hook.unlink()
+            print(f"🗑️  Removed obsolete {obsolete_build_hook}")
+
+    # Remove obsolete __init__.py if present (folder is no longer a module)
+    obsolete_init = fastapi_vue_scripts / "__init__.py"
+    if obsolete_init.exists():
+        if dry:
+            print(f"🗑️ Would remove obsolete {obsolete_init}")
+        else:
+            obsolete_init.unlink()
+            print(f"🗑️  Removed obsolete {obsolete_init}")
+
     # Copy all files from the template's fastapi-vue folder
     template_fastapi_vue_dir = TEMPLATE_DIR / "scripts" / "fastapi-vue"
-    for template_file in template_fastapi_vue_dir.iterdir():
+    for template_file in sorted(template_fastapi_vue_dir.iterdir()):
         if template_file.is_file():
             dest_path = fastapi_vue_scripts / template_file.name
             template = template_file.read_text("UTF-8")
