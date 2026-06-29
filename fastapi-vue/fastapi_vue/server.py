@@ -4,6 +4,7 @@ import asyncio
 import logging
 import os
 from contextlib import suppress
+from pathlib import Path
 from typing import Any
 
 import uvicorn
@@ -19,7 +20,7 @@ def run(
     *,
     listen: str | list[str] | None = None,
     default_port: int = 8000,
-    reload: bool = False,
+    reload: bool | Path = False,
     workers: int | None = None,
     **uvicorn_config: Any,  # noqa: ANN401
 ) -> None:
@@ -29,7 +30,9 @@ def run(
         app: The ASGI application path (e.g., "myapp.main:app")
         listen: Endpoint string(s) (see parse_endpoint for formats).
         default_port: Port to use when not specified in listen args.
-        reload: Enable auto-reload (requires uvicorn.run, single endpoint only).
+        reload: Enable auto-reload. If a Path is given, reload watches that
+            directory. True enables reload without setting a reload directory.
+            False disables reload and clears any reload_dirs.
         workers: Number of worker processes (requires uvicorn.run, single endpoint only).
         **uvicorn_config: Additional uvicorn config options (overrides all other settings).
 
@@ -39,7 +42,12 @@ def run(
         msg = "No endpoints to serve; check listen configuration"
         raise ValueError(msg)
 
-    conf: dict[str, object] = {"app": app, "reload": reload, "workers": workers}
+    if isinstance(reload, Path):
+        uvicorn_config["reload_dirs"] = [str(reload)]
+    elif not reload:
+        uvicorn_config.pop("reload_dirs", None)
+
+    conf: dict[str, object] = {"app": app, "reload": bool(reload), "workers": workers}
     proxy = os.getenv("FORWARDED_ALLOW_IPS", "127.0.0.1,::1")
     if proxy:
         conf["proxy_headers"] = True
