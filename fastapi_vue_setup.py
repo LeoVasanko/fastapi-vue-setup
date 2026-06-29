@@ -1375,7 +1375,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         app_file, app_var = app_info
         print(f"📍 Found FastAPI app: {app_var} in {app_file.name}")
         tpl_vars["APP_VAR"] = app_var
-        # Dotted module path relative to project dir (e.g. "paskia.fastapi.mainapp")
+        # Dotted module path relative to project dir (e.g. "{module_name}.api.main")
         app_module = ".".join(app_file.relative_to(project_dir).with_suffix("").parts)
         tpl_vars["APP_MODULE"] = app_module
     else:

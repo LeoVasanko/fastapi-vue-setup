@@ -20,7 +20,7 @@ def main() -> None:
         help=(f"Endpoint (default: localhost:{DEFAULT_PORT})."),
     )
     args = parser.parse_args()
-    dev = {"reload": True, "reload_dirs": ["paskia"]} if DEVMODE else {}
+    dev = {"reload": True, "reload_dirs": ["MODULE_NAME"]} if DEVMODE else {}
     server.run(
         "APP_MODULE:APP_VAR",
         listen=args.listen,
