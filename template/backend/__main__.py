@@ -25,6 +25,7 @@ def main() -> None:
         "APP_MODULE:APP_VAR",
         listen=args.listen,
         default_port=DEFAULT_PORT,
+        server_header=False,
         reload=Path(__file__).parent if DEVMODE else False,
     )
 
