@@ -40,7 +40,7 @@ async def run_devserver(
     viteurl, npm_install, vite = setup_vite(listen, DEFAULT_VITE_PORT)
     backurl, MODULE_NAME = setup_cli("PROJECT_CLI", backend, DEFAULT_DEV_PORT)
 
-    # Tell the everyone by environment (vite proxy and backend devmode use these)
+    # Tell everyone via environment (vite proxy and backend devmode use these)
     os.environ["ENVPREFIX_VITE_URL"] = viteurl
     os.environ["ENVPREFIX_BACKEND_URL"] = backurl
     os.environ["ENVPREFIX_DEV"] = "1"
