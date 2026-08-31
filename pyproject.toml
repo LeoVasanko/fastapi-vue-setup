@@ -14,8 +14,9 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://git.zi.fi/LeoVasanko/fastapi-vue-setup"
-Repository = "https://github.com/LeoVasanko/fastapi-vue-setup"
+Homepage = "https://vasanko.com/coders/fastapi-vue"
+Repository = "https://git.zi.fi/LeoVasanko/fastapi-vue-setup"
+Issues = "https://github.com/LeoVasanko/fastapi-vue-setup"
 
 [project.scripts]
 fastapi-vue-setup = "fastapi_vue_setup:main"

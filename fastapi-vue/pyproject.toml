@@ -11,8 +11,9 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://git.zi.fi/LeoVasanko/fastapi-vue"
-Repository = "https://github.com/LeoVasanko/fastapi-vue"
+Homepage = "https://vasanko.com/coders/fastapi-vue"
+Repository = "https://git.zi.fi/LeoVasanko/fastapi-vue-setup"
+Issues = "https://github.com/LeoVasanko/fastapi-vue-setup"
 
 [build-system]
 requires = ["hatchling", "hatch-vcs"]
