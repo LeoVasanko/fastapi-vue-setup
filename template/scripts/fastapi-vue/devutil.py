@@ -244,5 +244,7 @@ def setup_cli(
     host = endpoints[0]["host"]
     port = endpoints[0]["port"]
 
-    cmd = [cli, f"--listen={host}:{port}"]
+    # Run the package as a module with the current interpreter, instead of
+    # relying on a PATH-installed CLI entry point.
+    cmd = [sys.executable, "-m", cli, f"--listen={host}:{port}"]
     return f"http://{host}:{port}", cmd
