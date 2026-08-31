@@ -166,7 +166,7 @@ frontend = Frontend(Path(__file__).with_name("frontend-build"))
 # Lifespan block for patching apps that don't have one
 LIFESPAN_BLOCK = """
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(_app: FastAPI):
     \"\"\"Manage app startup and shutdown resources.\"\"\"
     await frontend.load()
     yield
