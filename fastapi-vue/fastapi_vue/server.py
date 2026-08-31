@@ -13,10 +13,11 @@ import uvicorn
 from uvicorn import Config, Server
 
 from .hostutil import parse_endpoints
-from .logging import install_access_log, patch_log_config
+from .logging import install_access_log, patch_lifespan_logging, patch_log_config
 from .startupbox import print_box
 
 tracerite.load()  # Early load on CLI load (import server); uvicorn workers reload via log config
+
 logger = logging.getLogger(__name__)
 
 _WILDCARD_HOSTS = frozenset({"0.0.0.0", "::"})  # noqa: S104
@@ -112,6 +113,7 @@ def run(  # noqa: PLR0913
 
     if access_log:
         install_access_log()
+    patch_lifespan_logging()
     uvicorn_config["access_log"] = False  # We always bypass uvicorn's own access logging
     uvicorn_config["log_config"] = patch_log_config(log_config, access_log=access_log)
 

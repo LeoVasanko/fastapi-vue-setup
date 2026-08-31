@@ -13,10 +13,15 @@ import re
 import sys
 from contextlib import suppress
 from copy import deepcopy
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import tracerite
 from uvicorn.config import Config
+from uvicorn.lifespan.on import LifespanOn
+
+if TYPE_CHECKING:
+    from uvicorn._types import LifespanScope
+    from uvicorn.lifespan.on import LifespanSendMessage
 
 from .accesslog import AccessLogMiddleware
 
@@ -72,6 +77,9 @@ class Formatter(logging.Formatter):
     ) -> None:
         """Load tracerite, optionally install the access log, detect color support."""
         tracerite.load()
+        tracerite.load_suppressions(
+            extra={"starlette.routing": "until", "fastapi.routing": "until"}
+        )
         if access:
             install_access_log()
         if use_colors in (True, False):
@@ -143,6 +151,59 @@ def install_access_log() -> None:
             self.loaded_app = AccessLogMiddleware(self.loaded_app)
 
     Config.load = load  # type: ignore[method-assign]
+
+
+_lifespan_patched = False
+
+
+def patch_lifespan_logging() -> None:
+    """Patch uvicorn's LifespanOn to log lifespan failures with exc_info.
+
+    Starlette formats lifespan exceptions into a plain-text ASGI message,
+    which uvicorn logs as-is without exc_info, while the exc_info-carrying
+    log in ``LifespanOn.main()`` is skipped when a failure message was sent.
+    This suppresses the text message and always logs the exception with
+    exc_info, so tracerite (or any exc_info-aware handler) renders the
+    traceback. Monkeypatches uvicorn internals; written against uvicorn 0.52.
+    """
+    global _lifespan_patched  # noqa: PLW0603  # once-per-process, resets in subprocesses
+    if _lifespan_patched:
+        return
+    _lifespan_patched = True
+
+    original_send = LifespanOn.send
+
+    async def send(self: LifespanOn, message: LifespanSendMessage) -> None:
+        # Drop the pre-formatted traceback text; main() logs the exception itself.
+        if message["type"] in ("lifespan.startup.failed", "lifespan.shutdown.failed"):
+            message = dict(message)  # type: ignore[assignment]
+            message.pop("message", None)
+        await original_send(self, message)
+
+    async def main(self: LifespanOn) -> None:
+        """Mirror upstream LifespanOn.main, but always log failures with exc_info."""
+        try:
+            app = self.config.loaded_app
+            scope: LifespanScope = {
+                "type": "lifespan",
+                "asgi": {"version": self.config.asgi_version, "spec_version": "2.0"},
+                "state": self.state,
+            }
+            await app(scope, self.receive, self.send)
+        except BaseException:
+            self.asgi = None
+            self.error_occurred = True
+            if self.startup_failed or self.shutdown_failed or self.config.lifespan != "auto":
+                phase = "shutdown" if self.shutdown_failed else "startup"
+                self.logger.exception("Uncaught exception during application %s", phase)
+            else:
+                self.logger.info("ASGI 'lifespan' protocol appears unsupported.")
+        finally:
+            self.startup_event.set()
+            self.shutdown_event.set()
+
+    LifespanOn.send = send  # type: ignore[method-assign]
+    LifespanOn.main = main  # type: ignore[method-assign]
 
 
 def patch_log_config(log_config, *, access_log: bool = True):  # noqa: ANN001, ANN201
