@@ -7,12 +7,14 @@ from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
+import tracerite
 import uvicorn
 from uvicorn import Config, Server
 
 from .hostutil import parse_endpoints
 from .logging import install_access_log, patch_log_config
 
+tracerite.load()  # Early load on CLI load (import server); uvicorn workers reload via log config
 logger = logging.getLogger(__name__)
 
 
@@ -37,11 +39,12 @@ def run(  # noqa: PLR0913
             directory. True enables reload without setting a reload directory.
             False disables reload and clears any reload_dirs.
         workers: Number of worker processes (requires uvicorn.run, single endpoint only).
-        access_log: Enable our colored HTTP/WebSocket access logging (uvicorn's
-            own access log is disabled either way).
-        log_config: Logging config passed to uvicorn. When access_log is
-            enabled, dict configs are patched best-effort for our access log
-            formatting (see fastapi_vue.logging.patch_log_config).
+        access_log: Enable our colored HTTP/WebSocket access logging middleware
+            (uvicorn's own access logging is always bypassed).
+        log_config: Logging config passed to uvicorn. Dict configs are patched
+            best-effort (see fastapi_vue.logging.patch_log_config): tracerite
+            loading and WebSocket chatter filtering are always installed, and
+            when access_log is enabled the access formatting is rewired too.
         **uvicorn_config: Additional uvicorn config options (overrides all other settings).
 
     """
@@ -57,9 +60,8 @@ def run(  # noqa: PLR0913
 
     if access_log:
         install_access_log()
-        log_config = patch_log_config(log_config)
-    uvicorn_config["access_log"] = False
-    uvicorn_config["log_config"] = log_config
+    uvicorn_config["access_log"] = False  # We always bypass uvicorn's own access logging
+    uvicorn_config["log_config"] = patch_log_config(log_config, access_log=access_log)
 
     conf: dict[str, object] = {"app": app, "reload": bool(reload), "workers": workers}
     proxy = os.getenv("FORWARDED_ALLOW_IPS", "127.0.0.1,::1")
