@@ -5,6 +5,7 @@
  * Configures Vite for FastAPI backend integration:
  * - Proxies /api/* requests to the FastAPI backend
  * - Builds to the Python module's frontend-build directory
+ * - Disables Vite's screen clearing on startup
  *
  * Options:
  *   paths - Array of paths to proxy (default: ["/api"])
@@ -26,6 +27,7 @@ export default function fastapiVue({ paths = ["/api"] } = {}) {
   return {
     name: "vite-plugin-fastapi-MODULE_NAME",
     config: () => ({
+      clearScreen: false,
       server: { proxy },
       build: {
         outDir: "../MODULE_NAME/frontend-build",
