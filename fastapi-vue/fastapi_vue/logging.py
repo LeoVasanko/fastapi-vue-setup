@@ -104,6 +104,18 @@ class WebSocketChatterFilter(logging.Filter):
         return not msg.startswith(self._PREFIXES)
 
 
+class UvicornQuietFilter(logging.Filter):
+    """Silence uvicorn's routine chatter (startup/shutdown lines, etc.).
+
+    Handler-side, not a logger level: uvicorn's ``configure_logging``
+    re-applies ``log_level`` to its loggers after ``dictConfig``, which would
+    override a level lifted in the config dict.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return not (record.name.startswith("uvicorn") and record.levelno < logging.WARNING)
+
+
 _installed = False
 
 
@@ -137,14 +149,15 @@ def patch_log_config(log_config, *, access_log: bool = True):  # noqa: ANN001, A
     untouched.
 
     Always adds an unreferenced NullHandler whose Formatter instantiation
-    loads tracerite in every process uvicorn applies the config in, a
-    filter dropping stock uvicorn's WebSocket chatter from ``uvicorn.error``,
-    an emoji-level-prefix Formatter in place of uvicorn's stock ``default``
-    formatter (a user-supplied one wins), a root logger entry so
-    ``logging.info()`` et al. print through the default handler, and a
-    no-prefix ``kanta`` logger entry (likewise).  With ``access_log``,
-    additionally rewires the ``access`` formatter to our Formatter and
-    attaches its handler to our ``fastapi_vue.access`` logger.  We must not
+    loads tracerite in every process uvicorn applies the config in, filters
+    on the default handler dropping stock uvicorn's WebSocket chatter and
+    routine INFO lines, an emoji-level-prefix Formatter in place of
+    uvicorn's stock ``default`` formatter (a user-supplied one wins), a root
+    logger entry so ``logging.info()`` et al. print through the default
+    handler, and a no-prefix ``kanta`` logger entry (likewise).
+    With ``access_log``, additionally rewires the ``access`` formatter to
+    our Formatter and attaches its handler to our ``fastapi_vue.access``
+    logger.  We must not
     attach handlers to ``uvicorn.access``: uvicorn gates its own
     protocol-level access logging on ``uvicorn.access.hasHandlers()``.
     """
@@ -162,9 +175,11 @@ def patch_log_config(log_config, *, access_log: bool = True):  # noqa: ANN001, A
     with suppress(Exception):
         filters = config.setdefault("filters", {})
         filters["ws_chatter"] = {"()": "fastapi_vue.logging.WebSocketChatterFilter"}
+        filters["uvicorn_quiet"] = {"()": "fastapi_vue.logging.UvicornQuietFilter"}
         handler_filters = config["handlers"]["default"].setdefault("filters", [])
-        if "ws_chatter" not in handler_filters:
-            handler_filters.append("ws_chatter")
+        for name in ("ws_chatter", "uvicorn_quiet"):
+            if name not in handler_filters:
+                handler_filters.append(name)
 
     # Emoji level prefixes for ordinary logs, replacing uvicorn's stock
     # default formatter; a user-supplied default formatter is left alone.
