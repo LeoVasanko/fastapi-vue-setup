@@ -114,36 +114,39 @@ class Frontend:
         """Load static files from disk with compression."""
         www: dict[str, tuple[bytes, bytes | None, dict]] = {}
         if not self.base.exists():
-            msg = f"Frontend folder {self.base} not found (try uv build)"
-            raise ValueError(msg)
-        paths = [PurePath()]
-        while paths:
-            current = self.base / paths.pop(0)
-            for p in current.iterdir():
-                rel = p.relative_to(self.base)
-                if p.is_dir():
-                    paths.append(rel)
-                    continue
-                # Read file
-                name = "/" + rel.as_posix()
-                mime = mimetypes.guess_type(name)[0] or "application/octet-stream"
-                name = name.removesuffix(self.index)
-                data = p.read_bytes()
-                etag = urlsafe_b64encode(blake3(data).digest(9)).decode()
-                if mime.startswith("text/"):
-                    mime += "; charset=UTF-8"
-                mtime = p.stat().st_mtime
-                cached = any(name.startswith(prefix) for prefix in self.cached_paths)
-                headers = {
-                    "etag": f'"{etag}"',
-                    "last-modified": format_date_time(mtime),
-                    "cache-control": ("max-age=31536000, immutable" if cached else "no-cache"),
-                    "content-type": mime,
-                }
-                zstd = ZstdCompressor(self.zstdlevel).compress(data)
-                if len(zstd) >= len(data):
-                    zstd = None
-                www[name] = data, zstd, headers
+            logger.error(
+                "Missing %s - no frontend (try uv build)",
+                self.base,
+            )
+        else:
+            paths = [PurePath()]
+            while paths:
+                current = self.base / paths.pop(0)
+                for p in current.iterdir():
+                    rel = p.relative_to(self.base)
+                    if p.is_dir():
+                        paths.append(rel)
+                        continue
+                    # Read file
+                    name = "/" + rel.as_posix()
+                    mime = mimetypes.guess_type(name)[0] or "application/octet-stream"
+                    name = name.removesuffix(self.index)
+                    data = p.read_bytes()
+                    etag = urlsafe_b64encode(blake3(data).digest(9)).decode()
+                    if mime.startswith("text/"):
+                        mime += "; charset=UTF-8"
+                    mtime = p.stat().st_mtime
+                    cached = any(name.startswith(prefix) for prefix in self.cached_paths)
+                    headers = {
+                        "etag": f'"{etag}"',
+                        "last-modified": format_date_time(mtime),
+                        "cache-control": ("max-age=31536000, immutable" if cached else "no-cache"),
+                        "content-type": mime,
+                    }
+                    zstd = ZstdCompressor(self.zstdlevel).compress(data)
+                    if len(zstd) >= len(data):
+                        zstd = None
+                    www[name] = data, zstd, headers
         if self.favicon and (m := fnmatch.filter(www, self.favicon)):
             data, zstd, headers = www[m[0]]
             if "immutable" in headers.get("cache-control", ""):
