@@ -1596,11 +1596,11 @@ def cmd_setup(args: argparse.Namespace) -> int:
         print("✅ Created .gitignore")
 
     # === Add dependencies using uv ===
-    # Pin fastapi-vue to the same major.minor as this setup tool (both are released
-    # from the same tags). Patch/dev releases may deviate, which also keeps this
-    # resolvable when running a development version of fastapi-vue-setup.
-    mm = re.match(r"(\d+)\.(\d+)", version)
-    fastapi_vue_req = f"fastapi-vue~={mm[1]}.{mm[2]}.0" if mm else "fastapi-vue"
+    # Pin fastapi-vue to the same major.minor.patch as this setup tool (both are
+    # released from the same tags). This makes freshly set up projects request the
+    # matching patch release directly, while `~=` still allows compatible updates.
+    mmp = re.match(r"(\d+)\.(\d+)\.(\d+)", version)
+    fastapi_vue_req = f"fastapi-vue~={mmp[1]}.{mmp[2]}.{mmp[3]}" if mmp else "fastapi-vue"
     if dry:
         print(f"📦 Would add: fastapi[standard], {fastapi_vue_req}")
     else:
