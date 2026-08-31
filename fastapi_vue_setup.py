@@ -80,7 +80,7 @@ def ruff_format_content(
             [  # noqa: S607
                 "ruff",
                 "check",
-                "--ignore=INP001,N999,CPY001",
+                "--ignore=EXE001,INP001,N999,CPY001",
                 "--fix",
                 "--output-format=concise",
                 str(temp_file),
