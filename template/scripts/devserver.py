@@ -9,6 +9,8 @@ import sys
 from contextlib import suppress
 from pathlib import Path
 
+import tracerite
+
 # Import util.py from scripts/fastapi-vue (not a package, so we adjust sys.path)
 sys.path.insert(0, str(Path(__file__).with_name("fastapi-vue")))
 from devutil import (
@@ -55,6 +57,7 @@ async def run_devserver(
 
 def main() -> None:
     """Parse CLI arguments and run the devserver."""
+    tracerite.load()
     parser = argparse.ArgumentParser(
         description="Run Vite and FastAPI development servers",
         formatter_class=argparse.RawDescriptionHelpFormatter,
