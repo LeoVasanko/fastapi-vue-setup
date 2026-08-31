@@ -87,6 +87,7 @@ class Formatter(logging.Formatter):
         tracerite.load_suppressions(
             extra={"starlette.routing": "until", "fastapi.routing": "until"}
         )
+        patch_lifespan_logging()
         patch_server_error_middleware()
         if access:
             install_access_log()
