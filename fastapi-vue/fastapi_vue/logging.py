@@ -28,6 +28,7 @@ ACCESS_LOGGER = "fastapi_vue.access"
 
 
 def strip_ansi(text: str) -> str:
+    """Remove ANSI escape codes from text."""
     return ANSI_ESCAPE_RE.sub("", text)
 
 
@@ -51,7 +52,7 @@ class Formatter(logging.Formatter):
     Records with the middleware's access fields (``client`` etc.) are
     formatted from those; anything else gets an emoji level prefix
     (``LEVEL: `` fallback for unknown levels) in place of uvicorn's
-    ``levelprefix``.  ANSI codes are stripped when colors are disabled.
+    ``levelprefix``.
 
     Instantiation always loads tracerite, and with ``access=True`` also
     installs the access-log middleware: ``dictConfig`` builds formatters while
@@ -65,10 +66,11 @@ class Formatter(logging.Formatter):
         fmt: str | None = None,
         datefmt: str | None = None,
         style: Literal["%", "{", "$"] = "%",
-        use_colors: bool | None = None,
+        use_colors: bool | None = None,  # noqa: FBT001  # mirrors logging.Formatter
         *,
         access: bool = False,
     ) -> None:
+        """Load tracerite, optionally install the access log, detect color support."""
         tracerite.load()
         if access:
             install_access_log()
@@ -78,7 +80,8 @@ class Formatter(logging.Formatter):
             self.use_colors = sys.stdout.isatty()
         super().__init__(fmt=fmt, datefmt=datefmt, style=style)
 
-    def formatMessage(self, record: logging.LogRecord) -> str:
+    def formatMessage(self, record: logging.LogRecord) -> str:  # noqa: N802
+        """Format access records via middleware fields, others with an emoji prefix."""
         if "client" not in record.__dict__:
             return _level_prefix(record) + record.getMessage()
         formatted = super().formatMessage(record)
@@ -98,6 +101,7 @@ class WebSocketChatterFilter(logging.Filter):
     _PREFIXES = ('%s - "WebSocket ', "connection open", "connection closed", "connection rejected")
 
     def filter(self, record: logging.LogRecord) -> bool:
+        """Keep records not matching stock WebSocket chatter prefixes."""
         msg = record.msg
         if not isinstance(msg, str):
             return True
@@ -113,6 +117,7 @@ class UvicornQuietFilter(logging.Filter):
     """
 
     def filter(self, record: logging.LogRecord) -> bool:
+        """Drop uvicorn records below WARNING."""
         return not (record.name.startswith("uvicorn") and record.levelno < logging.WARNING)
 
 
@@ -125,7 +130,7 @@ def install_access_log() -> None:
     The guard is deliberately module-level: reload/worker subprocesses
     re-import this module, resetting it so the patch is re-applied there.
     """
-    global _installed
+    global _installed  # noqa: PLW0603  # deliberately module-level, see docstring
     if _installed:
         return
     _installed = True

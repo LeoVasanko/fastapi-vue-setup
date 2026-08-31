@@ -7,8 +7,8 @@ import sys
 from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Self
+from urllib.parse import urlsplit
 
-import httpx
 from buildutil import find_dev_tool, find_install_tool, logger
 from fastapi_vue.hostutil import parse_endpoint
 
@@ -104,18 +104,45 @@ class ProcessGroup:
                             await p.wait()
 
 
+async def http_get_server(url: str, timeout: float) -> str | None:  # noqa: ASYNC109
+    """GET url with plain asyncio streams, return the response Server header.
+
+    Returns an empty string when the server responds without a Server header,
+    and None when the server is unreachable or doesn't answer in time.
+    """
+    parts = urlsplit(url)
+    host = parts.hostname or "localhost"
+    port = parts.port or (443 if parts.scheme == "https" else 80)
+    path = parts.path or "/"
+    if parts.query:
+        path += f"?{parts.query}"
+    try:
+        async with asyncio.timeout(timeout):
+            reader, writer = await asyncio.open_connection(host, port)
+            try:
+                writer.write(f"GET {path} HTTP/1.0\r\nHost: {host}\r\n\r\n".encode())
+                await writer.drain()
+                data = await reader.readuntil(b"\r\n\r\n")
+            finally:
+                writer.close()
+    except (OSError, EOFError, ValueError, TimeoutError):
+        return None
+    for line in data.decode("latin-1").split("\r\n"):
+        if line.lower().startswith("server:"):
+            return line.split(":", 1)[1].strip()
+    return ""
+
+
 async def check_ports_free(*urls: str) -> None:
     """Verify URLs are not responding (ports are free). Raise SystemExit if any respond."""
 
-    async def check(client: httpx.AsyncClient, url: str) -> None:
-        with suppress(httpx.RequestError):
-            res = await client.get(url, timeout=0.1)
-            server = res.headers.get("server", "server")
-            logger.warning("Conflicting %s already running at %s", server, url)
+    async def check(url: str) -> None:
+        server = await http_get_server(url, timeout=0.1)
+        if server is not None:
+            logger.warning("Conflicting %s already running at %s", server or "server", url)
             raise SystemExit(1)
 
-    async with httpx.AsyncClient() as client:
-        await asyncio.gather(*[check(client, url) for url in urls])
+    await asyncio.gather(*[check(url) for url in urls])
 
 
 async def ready(url: str, path: str = "", max_attempts: int = 50) -> None:
@@ -127,18 +154,14 @@ async def ready(url: str, path: str = "", max_attempts: int = 50) -> None:
     if not path:
         return
 
-    async with httpx.AsyncClient() as client:
-        for attempt in range(max_attempts):
-            try:
-                await client.get(f"{url}{path}", timeout=1.0)
-            except httpx.RequestError:
-                if attempt == max_attempts - 1:
-                    logger.warning("Backend didn't start in time")
-                    raise SystemExit(1) from None
-                await asyncio.sleep(0.1)
-            else:
-                logger.info("✓ Backend ready!")
-                return
+    for attempt in range(max_attempts):
+        if await http_get_server(f"{url}{path}", timeout=1.0) is not None:
+            logger.info("✓ Backend ready!")
+            return
+        if attempt == max_attempts - 1:
+            logger.warning("Backend didn't start in time")
+            raise SystemExit(1)
+        await asyncio.sleep(0.1)
 
 
 def setup_vite(

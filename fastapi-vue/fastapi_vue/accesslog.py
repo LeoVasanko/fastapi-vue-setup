@@ -179,8 +179,8 @@ def _http_access_log_extra(
 ) -> dict[str, object]:
     client_addr = _client_host(scope)
     full_path = _path(scope)
-    method = method if method is not None else cast(str, scope.get("method", "-"))
-    method = cast(str, scope.get("state", {}).get("access_log_method") or method)
+    method = method if method is not None else cast("str", scope.get("method", "-"))
+    method = cast("str", scope.get("state", {}).get("access_log_method") or method)
 
     try:
         status_phrase = http.HTTPStatus(status).phrase
@@ -318,18 +318,21 @@ def _assemble_access_log(fields: dict[str, object]) -> str:
 
 
 class AccessLogMiddleware:
+    """ASGI middleware logging HTTP and WebSocket access with colored fields."""
+
     def __init__(self, app: ASGI3Application) -> None:
+        """Store the wrapped app."""
         self.app = app
 
     async def __call__(
         self, scope: Scope, receive: ASGIReceiveCallable, send: ASGISendCallable
     ) -> None:
+        """Dispatch by scope type to HTTP/WebSocket access logging."""
         if scope["type"] == "http":
             return await self._handle_http(scope, receive, send)
-        elif scope["type"] == "websocket":
+        if scope["type"] == "websocket":
             return await self._handle_websocket(scope, receive, send)
-        else:
-            return await self.app(scope, receive, send)
+        return await self.app(scope, receive, send)
 
     async def _handle_http(
         self, scope: Scope, receive: ASGIReceiveCallable, send: ASGISendCallable
@@ -346,7 +349,10 @@ class AccessLogMiddleware:
                     extra=www_scope.get("state", {}).get("log_extra", ""),
                 )
                 logger.info(
-                    f'{fields["client_addr"]} - "{fields["request_line"]}" {fields["status_code"]}',
+                    '%s - "%s" %s',
+                    fields["client_addr"],
+                    fields["request_line"],
+                    fields["status_code"],
                     extra=fields,
                 )
             await send(message)
@@ -369,7 +375,7 @@ class AccessLogMiddleware:
 
         def _close_fields(message: ASGIReceiveEvent | ASGISendEvent) -> dict[str, object]:
             if accepted:
-                assert ws_id is not None
+                assert ws_id is not None  # noqa: S101  # guaranteed once accepted
                 return _ws_close_extra(
                     www_scope,
                     ws_id,
