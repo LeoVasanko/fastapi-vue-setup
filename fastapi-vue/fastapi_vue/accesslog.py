@@ -6,9 +6,10 @@ import http
 import itertools
 import logging
 import time
-import unicodedata
 from ipaddress import IPv6Address
 from typing import TYPE_CHECKING, cast
+
+from .termwidth import pad_display
 
 if TYPE_CHECKING:
     from uvicorn._types import (
@@ -37,14 +38,6 @@ _PATH = "\033[38;5;250m"  # path (white)
 _TIMING = "\033[38;5;242m"  # timing/devmode (dark grey)
 _WS_OPEN = "\033[38;5;226m"  # WebSocket connect (brightest yellow)
 _WS_CLOSE = "\033[38;5;142m"  # WebSocket disconnect (dimmer yellow)
-
-
-def _display_width(text: str) -> int:
-    return sum(2 if unicodedata.east_asian_width(char) in ("F", "W") else 1 for char in text)
-
-
-def _pad_display(text: str, width: int) -> str:
-    return text + " " * max(width - _display_width(text), 0)
 
 
 def _format_duration(duration: float) -> str:
@@ -193,9 +186,9 @@ def _http_access_log_extra(
         "client": _format_client_ip(client_addr).ljust(19),
         "status": f"{_status_color(status)}{str(status).rjust(3)}{_RESET}",
         "method": (
-            f"{_METHOD_READ}{_pad_display('🔌', 7)}{_RESET}"
+            f"{_METHOD_READ}{pad_display('🔌', 7)}{_RESET}"
             if method == "🔌"
-            else f"{_method_color(method)}{_pad_display(method, 7)}{_RESET}"
+            else f"{_method_color(method)}{pad_display(method, 7)}{_RESET}"
         ),
         "host": f"{_HOST}{_header(scope, 'host') or '-'}{_RESET}",
         "path": f"{_PATH}{full_path}{_RESET}",
@@ -229,7 +222,7 @@ def _ws_open_extra(
     return {
         "client": _format_client_ip(client_addr).ljust(19),
         "status": f"{_WS_OPEN} {ws_id}{_RESET}",
-        "method": f"{_METHOD_READ}{_pad_display('🔌', 7)}{_RESET}",
+        "method": f"{_METHOD_READ}{pad_display('🔌', 7)}{_RESET}",
         "host": f"{_HOST}{host}{_RESET}" if host else "",
         "path": path,
         "extra": extra,
@@ -264,7 +257,7 @@ def _ws_close_extra(
     return {
         "client": " " * 19,
         "status": f"{_WS_CLOSE} {ws_id}{_RESET}",
-        "method": f"{_TIMING}{_pad_display('closed', 7)}{_RESET}",
+        "method": f"{_TIMING}{pad_display('closed', 7)}{_RESET}",
         "host": "",
         "path": f"{code} {status_text}",
         "extra": extra,
