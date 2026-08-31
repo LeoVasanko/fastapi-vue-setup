@@ -8,6 +8,7 @@ output so the same formatting code path produces plain text.
 
 from __future__ import annotations
 
+import io
 import logging
 import re
 import sys
@@ -16,10 +17,15 @@ from copy import deepcopy
 from typing import TYPE_CHECKING, Literal
 
 import tracerite
+from starlette.middleware.errors import ServerErrorMiddleware
+from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
 from uvicorn.config import Config
 from uvicorn.lifespan.on import LifespanOn
 
 if TYPE_CHECKING:
+    from typing import Any
+
+    from starlette.requests import Request
     from uvicorn._types import LifespanScope
     from uvicorn.lifespan.on import LifespanSendMessage
 
@@ -63,7 +69,8 @@ class Formatter(logging.Formatter):
     installs the access-log middleware: ``dictConfig`` builds formatters while
     uvicorn applies ``log_config``, which happens before the app is loaded —
     including in reload/worker subprocesses that re-import the config without
-    calling ``fastapi_vue.server.run()`` again.
+    calling ``fastapi_vue.server.run()`` again.  Patching the server error
+    middleware here likewise propagates it to those subprocesses.
     """
 
     def __init__(
@@ -80,6 +87,7 @@ class Formatter(logging.Formatter):
         tracerite.load_suppressions(
             extra={"starlette.routing": "until", "fastapi.routing": "until"}
         )
+        patch_server_error_middleware()
         if access:
             install_access_log()
         if use_colors in (True, False):
@@ -204,6 +212,73 @@ def patch_lifespan_logging() -> None:
 
     LifespanOn.send = send  # type: ignore[method-assign]
     LifespanOn.main = main  # type: ignore[method-assign]
+
+
+_server_error_patched = False
+
+DEBUG_INGRESS = """This page is shown for your guidance because the application is \
+running in debug mode and has crashed handling this request."""
+
+
+def _generate_html(exc: Exception) -> str:
+    return tracerite.html_page(
+        exc,
+        title="FastAPI debugger",
+        heading="500 Server Error",
+        ingress=DEBUG_INGRESS,
+    )
+
+
+def _generate_plain_text(exc: Exception) -> str:
+    buffer = io.StringIO()
+    tracerite.tty_traceback(exc, file=buffer)
+    return buffer.getvalue()
+
+
+def _generate_json(exc: Exception) -> dict[str, Any]:
+    chain = tracerite.extract_chain(exc)
+    return {"detail": "Internal Server Error", "traceback": chain}
+
+
+def patch_server_error_middleware() -> None:
+    """Patch Starlette's ServerErrorMiddleware to format debug errors with tracerite.
+
+    Starlette's debug responses use its own static HTML traceback template.
+    This replaces ``debug_response`` with tracerite renderers (source
+    context, locals, chained exceptions), adds ``accept: application/json``
+    handling, and returns a JSON body also for non-debug errors when
+    requested. Only apps running with ``debug=True`` produce traceback
+    responses. Monkeypatches Starlette internals; written against
+    starlette 1.6.
+    """
+    global _server_error_patched  # noqa: PLW0603  # once-per-process, resets in subprocesses
+    if _server_error_patched:
+        return
+    _server_error_patched = True
+
+    def debug_response(
+        self: ServerErrorMiddleware,  # noqa: ARG001
+        request: Request,
+        exc: Exception,
+    ) -> Response:
+        accept = request.headers.get("accept", "")
+        if "text/html" in accept:
+            return HTMLResponse(_generate_html(exc), status_code=500)
+        if "application/json" in accept:
+            return JSONResponse(_generate_json(exc), status_code=500)
+        return PlainTextResponse(_generate_plain_text(exc), status_code=500)
+
+    def error_response(
+        self: ServerErrorMiddleware,  # noqa: ARG001
+        request: Request,
+        exc: Exception,  # noqa: ARG001  # signature mirrors Starlette's
+    ) -> Response:
+        if "application/json" in request.headers.get("accept", ""):
+            return JSONResponse({"detail": "Internal Server Error"}, status_code=500)
+        return PlainTextResponse("Internal Server Error", status_code=500)
+
+    ServerErrorMiddleware.debug_response = debug_response  # type: ignore[method-assign]
+    ServerErrorMiddleware.error_response = error_response  # type: ignore[method-assign]
 
 
 def patch_log_config(log_config, *, access_log: bool = True):  # noqa: ANN001, ANN201
