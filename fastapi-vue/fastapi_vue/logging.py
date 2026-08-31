@@ -31,8 +31,27 @@ def strip_ansi(text: str) -> str:
     return ANSI_ESCAPE_RE.sub("", text)
 
 
+_LEVEL_EMOJI = {
+    logging.DEBUG: "🐛",
+    logging.INFO: "🔷",
+    logging.WARNING: "❗",
+    logging.ERROR: "🛑",
+    logging.CRITICAL: "🚨",
+}
+
+
+def _level_prefix(record: logging.LogRecord) -> str:
+    emoji = _LEVEL_EMOJI.get(record.levelno)
+    return f"{emoji} " if emoji else f"{record.levelname}: "
+
+
 class Formatter(logging.Formatter):
-    """Formatter for the combined HTTP/WebSocket access log.
+    """Formatter for both access records and ordinary log messages.
+
+    Records with the middleware's access fields (``client`` etc.) are
+    formatted from those; anything else gets an emoji level prefix
+    (``LEVEL: `` fallback for unknown levels) in place of uvicorn's
+    ``levelprefix``.  ANSI codes are stripped when colors are disabled.
 
     Instantiation always loads tracerite, and with ``access=True`` also
     installs the access-log middleware: ``dictConfig`` builds formatters while
@@ -60,6 +79,8 @@ class Formatter(logging.Formatter):
         super().__init__(fmt=fmt, datefmt=datefmt, style=style)
 
     def formatMessage(self, record: logging.LogRecord) -> str:
+        if "client" not in record.__dict__:
+            return _level_prefix(record) + record.getMessage()
         formatted = super().formatMessage(record)
         if not self.use_colors:
             formatted = strip_ansi(formatted)
@@ -116,11 +137,15 @@ def patch_log_config(log_config, *, access_log: bool = True):  # noqa: ANN001, A
     untouched.
 
     Always adds an unreferenced NullHandler whose Formatter instantiation
-    loads tracerite in every process uvicorn applies the config in, and a
-    filter dropping stock uvicorn's WebSocket chatter from ``uvicorn.error``.
-    With ``access_log``, additionally rewires the ``access`` formatter to our
-    Formatter and attaches its handler to our ``fastapi_vue.access`` logger.
-    We must not attach handlers to ``uvicorn.access``: uvicorn gates its own
+    loads tracerite in every process uvicorn applies the config in, a
+    filter dropping stock uvicorn's WebSocket chatter from ``uvicorn.error``,
+    an emoji-level-prefix Formatter in place of uvicorn's stock ``default``
+    formatter (a user-supplied one wins), a root logger entry so
+    ``logging.info()`` et al. print through the default handler, and a
+    no-prefix ``kanta`` logger entry (likewise).  With ``access_log``,
+    additionally rewires the ``access`` formatter to our Formatter and
+    attaches its handler to our ``fastapi_vue.access`` logger.  We must not
+    attach handlers to ``uvicorn.access``: uvicorn gates its own
     protocol-level access logging on ``uvicorn.access.hasHandlers()``.
     """
     if not isinstance(log_config, dict):
@@ -140,6 +165,43 @@ def patch_log_config(log_config, *, access_log: bool = True):  # noqa: ANN001, A
         handler_filters = config["handlers"]["default"].setdefault("filters", [])
         if "ws_chatter" not in handler_filters:
             handler_filters.append("ws_chatter")
+
+    # Emoji level prefixes for ordinary logs, replacing uvicorn's stock
+    # default formatter; a user-supplied default formatter is left alone.
+    with suppress(Exception):
+        default = config["formatters"]["default"]
+        if default.get("()") in (None, "uvicorn.logging.DefaultFormatter"):
+            config["formatters"]["default"] = {
+                "()": "fastapi_vue.logging.Formatter",
+                "fmt": "%(message)s",
+                "use_colors": None,
+            }
+
+    # uvicorn's default config leaves the root logger handlerless, eating
+    # logging.info() et al.; route root through uvicorn's default handler.
+    with suppress(Exception):
+        root = config.setdefault("root", {})
+        root.setdefault("level", "INFO")
+        root_handlers = root.setdefault("handlers", [])
+        if "default" not in root_handlers:
+            root_handlers.append("default")
+
+    # kanta-style output (diffs, colored headers) prints without prefixes,
+    # like our access log.  A user-supplied "kanta" logger entry wins.
+    with suppress(Exception):
+        config["formatters"].setdefault("plain", {"fmt": "%(message)s"})
+        config["handlers"].setdefault(
+            "plain",
+            {
+                "class": "logging.StreamHandler",
+                "formatter": "plain",
+                "stream": "ext://sys.stderr",
+            },
+        )
+        config.setdefault("loggers", {}).setdefault(
+            "kanta",
+            {"handlers": ["plain"], "level": "INFO", "propagate": False},
+        )
 
     if access_log:
         with suppress(Exception):
