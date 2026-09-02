@@ -296,7 +296,10 @@ def patch_log_config(log_config, *, access_log: bool = True):  # noqa: ANN001, A
     routine INFO lines, an emoji-level-prefix Formatter in place of
     uvicorn's stock ``default`` formatter (a user-supplied one wins), a root
     logger entry so ``logging.info()`` et al. print through the default
-    handler, and a no-prefix ``kanta`` logger entry (likewise).
+    handler, and a no-prefix ``kanta`` logger entry (likewise).  The
+    ``watchfiles.main`` logger is lifted to WARNING so its INFO "N changes
+    detected" line is dropped while the WARNING "Reloading..." line (logged
+    to ``uvicorn.error``) still shows; a user-supplied level wins.
     With ``access_log``, additionally rewires the ``access`` formatter to
     our Formatter and attaches its handler to our ``fastapi_vue.access``
     logger.  We must not
@@ -342,6 +345,11 @@ def patch_log_config(log_config, *, access_log: bool = True):  # noqa: ANN001, A
         root_handlers = root.setdefault("handlers", [])
         if "default" not in root_handlers:
             root_handlers.append("default")
+
+    # watchfiles logs "N changes detected" to its own logger at INFO; only the
+    # WARNING "Reloading..." line (uvicorn.error) should show.
+    with suppress(Exception):
+        config.setdefault("loggers", {}).setdefault("watchfiles.main", {}).setdefault("level", "WARNING")
 
     # kanta-style output (diffs, colored headers) prints without prefixes,
     # like our access log.  A user-supplied "kanta" logger entry wins.
