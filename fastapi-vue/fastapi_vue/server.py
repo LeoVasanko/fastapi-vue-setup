@@ -18,10 +18,16 @@ from .logging import (
     patch_lifespan_logging,
     patch_log_config,
     patch_server_error_middleware,
+    use_color,
 )
 from .startupbox import print_box
 
 tracerite.load()  # Early load on CLI load (import server); uvicorn workers reload via log config
+
+# Install force color to aid tracerite and any external software to use full color when available
+# Define NO_COLOR or FORCE_COLOR beforehand to avoid this
+if "FORCE_COLOR" not in os.environ and use_color():
+    os.environ["FORCE_COLOR"] = "3"
 
 logger = logging.getLogger(__name__)
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import io
 import logging
+import os
 import re
 import sys
 from contextlib import suppress
@@ -41,6 +42,21 @@ ACCESS_LOGGER = "fastapi_vue.access"
 def strip_ansi(text: str) -> str:
     """Remove ANSI escape codes from text."""
     return ANSI_ESCAPE_RE.sub("", text)
+
+
+def use_color(stream: io.TextIOBase = sys.stderr) -> bool:
+    """Test if the stream supports color codes."""
+    if os.environ.get("NO_COLOR"):  # Non empty means no (no-color.org)
+        return False
+    if os.environ.get("FORCE_COLOR", "") not in {"", "0"}:  # force-color.org, node
+        return True
+    if hasattr(stream, "isatty") and stream.isatty():
+        return True
+    with suppress(KeyError, ValueError, OSError):  # Journald does color (-ocat)
+        dev, ino = map(int, os.environ["JOURNAL_STREAM"].split(":", 1))
+        st = os.fstat(stream.fileno())
+        return st.st_dev == dev and st.st_ino == ino
+    return False
 
 
 _LEVEL_EMOJI = {
@@ -94,7 +110,7 @@ class Formatter(logging.Formatter):
         if use_colors in (True, False):
             self.use_colors = use_colors
         else:
-            self.use_colors = sys.stdout.isatty()
+            self.use_colors = use_color(sys.stdout)
         super().__init__(fmt=fmt, datefmt=datefmt, style=style)
 
     def formatMessage(self, record: logging.LogRecord) -> str:  # noqa: N802
@@ -349,7 +365,9 @@ def patch_log_config(log_config, *, access_log: bool = True):  # noqa: ANN001, A
     # watchfiles logs "N changes detected" to its own logger at INFO; only the
     # WARNING "Reloading..." line (uvicorn.error) should show.
     with suppress(Exception):
-        config.setdefault("loggers", {}).setdefault("watchfiles.main", {}).setdefault("level", "WARNING")
+        config.setdefault("loggers", {}).setdefault("watchfiles.main", {}).setdefault(
+            "level", "WARNING"
+        )
 
     # kanta-style output (diffs, colored headers) prints without prefixes,
     # like our access log.  A user-supplied "kanta" logger entry wins.
