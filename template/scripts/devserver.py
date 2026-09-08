@@ -5,8 +5,8 @@
 import argparse
 import asyncio
 import os
+import subprocess
 import sys
-from contextlib import suppress
 from pathlib import Path
 
 import tracerite
@@ -41,6 +41,7 @@ async def run_devserver(
 
     viteurl, npm_install, vite = setup_vite(listen, DEFAULT_VITE_PORT)
     backurl, MODULE_NAME = setup_cli("PROJECT_CLI", backend, DEFAULT_DEV_PORT)
+    await check_ports_free(viteurl, backurl)
 
     # Tell everyone via environment (vite proxy and backend devmode use these)
     os.environ["ENVPREFIX_VITE_URL"] = viteurl
@@ -49,10 +50,9 @@ async def run_devserver(
 
     async with ProcessGroup() as pg:
         npm_i = await pg.spawn(*npm_install, cwd=front)
-        await check_ports_free(viteurl, backurl)
-        await pg.spawn(*MODULE_NAME, *(extra_args or []))
+        await pg.spawn(*MODULE_NAME, *(extra_args or []), vital=True)
         await pg.wait(npm_i, ready(backurl, path=HEALTH))
-        await pg.spawn(*vite, cwd=front)
+        await pg.spawn(*vite, cwd=front, vital=True)
 
 
 def main() -> None:
@@ -75,8 +75,12 @@ def main() -> None:
         help=f"FastAPI (default: localhost:{DEFAULT_DEV_PORT})",
     )
     args, extra_args = parser.parse_known_args()
-    with suppress(KeyboardInterrupt):
+    try:
         asyncio.run(run_devserver(args.listen, args.backend, extra_args))
+    except* KeyboardInterrupt:
+        pass  # user stopped the devserver: exit 0
+    except* subprocess.SubprocessError:
+        raise SystemExit(1) from None  # error already logged; exit 1
 
 
 HELP_EPILOG = """
