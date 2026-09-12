@@ -1212,7 +1212,9 @@ def ensure_python_project(project_dir: Path, *, dry: bool = False) -> bool:
     return True
 
 
-def ensure_frontend(project_dir: Path, *, vue_args: list[str] | None = None, dry: bool = False) -> bool:
+def ensure_frontend(
+    project_dir: Path, *, vue_args: list[str] | None = None, dry: bool = False
+) -> bool:
     """Ensure frontend directory exists with a Vue project, run create-vue if needed."""
     frontend_dir = project_dir / "frontend"
     package_json = frontend_dir / "package.json"

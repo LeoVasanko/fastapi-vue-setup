@@ -41,7 +41,6 @@ async def run_devserver(
 
     viteurl, npm_install, vite = setup_vite(listen, DEFAULT_VITE_PORT)
     backurl, MODULE_NAME = setup_cli("PROJECT_CLI", backend, DEFAULT_DEV_PORT)
-    await check_ports_free(viteurl, backurl)
 
     # Tell everyone via environment (vite proxy and backend devmode use these)
     os.environ["ENVPREFIX_VITE_URL"] = viteurl
@@ -49,6 +48,7 @@ async def run_devserver(
     os.environ["ENVPREFIX_DEV"] = "1"
 
     async with ProcessGroup() as pg:
+        pg.create_task(check_ports_free(viteurl, backurl))
         npm_i = await pg.spawn(*npm_install, cwd=front)
         await pg.spawn(*MODULE_NAME, *(extra_args or []), vital=True)
         await pg.wait(npm_i, ready(backurl, path=HEALTH))
@@ -78,9 +78,9 @@ def main() -> None:
     try:
         asyncio.run(run_devserver(args.listen, args.backend, extra_args))
     except* KeyboardInterrupt:
-        pass  # user stopped the devserver: exit 0
-    except* subprocess.SubprocessError:
-        raise SystemExit(1) from None  # error already logged; exit 1
+        pass  # user stopped the devserver: normal exit
+    except* (subprocess.SubprocessError, RuntimeError):
+        raise SystemExit(1) from None  # logged in devutil already; exit 1
 
 
 HELP_EPILOG = """

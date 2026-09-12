@@ -65,7 +65,9 @@ class ProcessGroup(asyncio.TaskGroup):
             if not isinstance(w, Process):
                 return await w
             if retcode := await w.wait():
-                raise CalledProcessError(retcode, self._cmds[w])
+                cmd = self._cmds[w]
+                logger.warning("Process %s exited with status %d", Path(cmd[0]).stem, retcode)
+                raise CalledProcessError(retcode, cmd)
             return retcode
 
         async with asyncio.TaskGroup() as group:
@@ -104,22 +106,23 @@ async def http_get_server(url: str, timeout: float) -> str | None:  # noqa: ASYN
 
 
 async def check_ports_free(*urls: str) -> None:
-    """Verify URLs are not responding (ports are free). Raise SystemExit if any respond."""
+    """Verify URLs are not responding (ports are free).
 
-    async def check(url: str) -> None:
-        server = await http_get_server(url, timeout=0.1)
+    Meant to run as a task inside a TaskGroup. Logs the conflict and raises
+    RuntimeError (handled like a failed process) if any URL responds.
+    """
+    servers = await asyncio.gather(*(http_get_server(url, timeout=0.1) for url in urls))
+    for url, server in zip(urls, servers, strict=True):
         if server is not None:
-            logger.warning("Conflicting %s already running at %s", server or "server", url)
-            raise SystemExit(1)
-
-    await asyncio.gather(*[check(url) for url in urls])
+            logger.error("Conflicting %s already running at %s", server or "server", url)
+            raise RuntimeError(url)
 
 
 async def ready(url: str, path: str = "", max_attempts: int = 50) -> None:
     """Wait for the server to be ready by polling an endpoint.
 
     Use empty path to disable the check and make this return immediately.
-    Raises SystemExit(1) if server doesn't start in time.
+    Raises TimeoutError if server doesn't start in time.
     """
     if not path:
         return
@@ -129,8 +132,7 @@ async def ready(url: str, path: str = "", max_attempts: int = 50) -> None:
             logger.info("✓ Backend ready!")
             return
         if attempt == max_attempts - 1:
-            logger.warning("Backend didn't start in time")
-            raise SystemExit(1)
+            raise TimeoutError(f"Backend at {url} didn't start in time")  # noqa: EM102, TRY003
         await asyncio.sleep(0.1)
 
 
