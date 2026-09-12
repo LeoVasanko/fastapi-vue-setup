@@ -97,9 +97,9 @@ async def http_get_server(url: str, timeout: float) -> str | None:  # noqa: ASYN
                 writer.close()
     except (OSError, EOFError, ValueError, TimeoutError):
         return None
-    for line in data.decode("latin-1").split("\r\n"):
+    for line in data.decode(errors="replace").split("\r\n"):
         if line.lower().startswith("server:"):
-            return line.split(":", 1)[1].strip()
+            return line[7:].strip()
     return ""
 
 
