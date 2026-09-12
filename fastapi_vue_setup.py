@@ -9,6 +9,7 @@ Options:
     --module-name NAME      Python module name (auto-detected from pyproject.toml)
     --ports DEFAULT,VITE,DEV  Port configuration (default: 3100,3100,3200)
     --dry                   Show what would be done without making changes
+    -- ARGS                 Extra arguments forwarded to create-vue (e.g. -- --default)
 """
 
 import argparse
@@ -1211,7 +1212,7 @@ def ensure_python_project(project_dir: Path, *, dry: bool = False) -> bool:
     return True
 
 
-def ensure_frontend(project_dir: Path, *, dry: bool = False) -> bool:
+def ensure_frontend(project_dir: Path, *, vue_args: list[str] | None = None, dry: bool = False) -> bool:
     """Ensure frontend directory exists with a Vue project, run create-vue if needed."""
     frontend_dir = project_dir / "frontend"
     package_json = frontend_dir / "package.json"
@@ -1234,6 +1235,10 @@ def ensure_frontend(project_dir: Path, *, dry: bool = False) -> bool:
         "bun": [js_tool, "create", "vue@latest", "frontend"],
     }
     create_cmd = create_vue_commands[js_name]
+    if vue_args:
+        # npm needs a `--` separator so it doesn't eat the arguments;
+        # create-vue runs non-interactively when given feature flags (e.g. --default)
+        create_cmd = [*create_cmd, *(["--"] if js_name == "npm" else []), *vue_args]
 
     if dry:
         print(f"🎨 Would run: {' '.join(create_cmd)}")
@@ -1241,7 +1246,8 @@ def ensure_frontend(project_dir: Path, *, dry: bool = False) -> bool:
 
     print("🎨 No frontend/ found, creating Vue project...")
     print(f">>> {' '.join(create_cmd)}")
-    print("(Follow the prompts to configure your Vue app)")
+    if not vue_args:
+        print("(Follow the prompts to configure your Vue app)")
     print()
     result = subprocess.run(create_cmd, cwd=project_dir, check=False)  # noqa: S603
     if result.returncode != 0:
@@ -1285,7 +1291,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
     print(f"🔧 Setting up project: {project_dir}")
 
     # Step 1: Ensure frontend exists (do this first so cancellation doesn't leave partial setup)
-    if not ensure_frontend(project_dir, dry=dry):
+    if not ensure_frontend(project_dir, vue_args=args.vue_args, dry=dry):
         return 1
 
     # Step 2: Ensure Python project exists
@@ -1663,6 +1669,8 @@ Examples:
   fastapi-vue-setup .                  Set up integration in current directory
   fastapi-vue-setup . --dry            Preview what would be done
   fastapi-vue-setup . --ports=8000,5173,8080  Change default ports (backend, vite dev, backend dev)
+  fastapi-vue-setup my-app -- --default  Non-interactive create-vue (extra args after --
+                                         are forwarded to create-vue, e.g. --default, --ts)
 """,
     )
     parser.add_argument(
@@ -1685,7 +1693,15 @@ Examples:
     )
     parser.add_argument("--dry", "--dry-run", action="store_true", help="Show what would be done")
 
-    args = parser.parse_args()
+    # Everything after a standalone `--` is forwarded verbatim to create-vue
+    argv = sys.argv[1:]
+    if "--" in argv:
+        split = argv.index("--")
+        ours, vue_args = argv[:split], argv[split + 1 :]
+    else:
+        ours, vue_args = argv, []
+    args = parser.parse_args(ours)
+    args.vue_args = vue_args
 
     if args.project_dir is None:
         parser.print_help()
