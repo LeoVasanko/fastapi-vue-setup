@@ -5,10 +5,11 @@ import argparse
 import os
 from pathlib import Path
 
+import fastapi_vue
 from fastapi_vue import server
 
 DEFAULT_PORT = TEMPLATE_DEFAULT_PORT
-DEVMODE = os.getenv("ENVPREFIX_DEV") == "1"
+os.environ["FASTAPI_VUE"] = "ENVPREFIX"
 
 
 def main() -> None:
@@ -26,7 +27,7 @@ def main() -> None:
         listen=args.listen,
         default_port=DEFAULT_PORT,
         server_header=False,
-        reload=Path(__file__).parent if DEVMODE else False,
+        reload=Path(__file__).parent if fastapi_vue.env.dev else False,
     )
 
 

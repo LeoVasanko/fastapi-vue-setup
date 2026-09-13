@@ -15,6 +15,7 @@ from uvicorn import Config, Server
 from uvicorn.main import STARTUP_FAILURE
 from uvicorn.supervisors import ChangeReload, Multiprocess
 
+from .environ import env
 from .hostutil import parse_endpoints
 from .logging import (
     install_access_log,
@@ -44,10 +45,16 @@ def _bind_hosts(host: str) -> list[str]:
 
 
 def _connect_url(endpoints: list[dict]) -> str:
-    """Return a URL the user can connect to for the first TCP endpoint."""
-    for key, value in sorted(os.environ.items()):
-        if key.endswith("_VITE_URL") and value:
-            return value
+    """Return a URL the user can connect to for the first TCP endpoint.
+
+    When running under the devserver (<PREFIX>_VITE_URL is set), the vite
+    devserver URL is shown instead, as that is where the page is served.
+    Wildcard binds (0.0.0.0, ::) are shown as localhost, as that is the
+    address a user can actually open. Unix-socket-only setups show plain
+    http://localhost (the typical reverse-proxy target).
+    """
+    if vite_url := env.vite_url:
+        return vite_url
     for endpoint in endpoints:
         host = endpoint.get("host")
         if host is None:

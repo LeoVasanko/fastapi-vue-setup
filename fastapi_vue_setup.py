@@ -161,7 +161,7 @@ NEW_BUILD_HOOK_PATH = "scripts/fastapi-vue/buildhook.py"
 # Frontend instantiation block for patching existing apps
 FRONTEND_BLOCK = """
 # Vue Frontend static files
-frontend = Frontend(Path(__file__).with_name("frontend-build"))
+frontend = fastapi_vue.Frontend(Path(__file__).with_name("frontend-build"))
 """
 
 # Lifespan block for patching apps that don't have one
@@ -473,8 +473,8 @@ def _find_app_in_subpackage(subpkg_dir: Path) -> tuple[Path, str] | None:
     return None
 
 
-def _add_devmode_to_main(content: str) -> str:
-    """Add DEVMODE variable to an existing main module."""
+def _add_env_prefix_to_main(content: str) -> str:
+    """Add FASTAPI_VUE environment prefix setup to an existing main module."""
     lines = content.splitlines()
 
     # Check if os is imported
@@ -489,7 +489,7 @@ def _add_devmode_to_main(content: str) -> str:
         elif stripped and not stripped.startswith("#"):
             break
 
-    # Insert imports and DEVMODE after existing imports
+    # Insert imports and env setup after existing imports
     new_lines = []
     if not has_os_import:
         new_lines.append("import os")
@@ -497,7 +497,7 @@ def _add_devmode_to_main(content: str) -> str:
         [
             "",
             "# Added by fastapi-vue-setup",
-            'DEVMODE = os.getenv("ENVPREFIX_DEV") == "1"',
+            'os.environ["FASTAPI_VUE"] = "ENVPREFIX"',
             "",
         ]
     )
@@ -597,11 +597,35 @@ def render_template(template: str, **kwargs: str) -> str:
     return result
 
 
-def patch_app_file(path: Path, main_module_path: str, app_var: str, *, dry: bool = False) -> bool:
+def needs_app_migration(project_dir: Path) -> bool:
+    """Check if the project was set up with fastapi-vue older than 1.6.
+
+    Those versions patched app.py with `from fastapi_vue import Frontend` and
+    a DEVMODE import from the main module; 1.6+ uses fastapi_vue.Frontend and
+    fastapi_vue.env. Must be called before the dependency step rewrites the
+    fastapi-vue requirement in pyproject.toml.
+    """
+    pyproject = project_dir / "pyproject.toml"
+    if not pyproject.exists():
+        return False
+    data = tomlkit.parse(pyproject.read_text("UTF-8"))
+    for dep in data.get("project", {}).get("dependencies", []):
+        match = re.match(r"\s*fastapi-vue(?:\[[^\]]*\])?\s*(.*)", str(dep))
+        if match:
+            version = re.search(r"(\d+)\.(\d+)", match.group(1))
+            return version is not None and (int(version[1]), int(version[2])) < (1, 6)
+    return False
+
+
+def patch_app_file(
+    path: Path, main_module_path: str, app_var: str, *, migrate: bool = False, dry: bool = False
+) -> bool:
     """Patch an existing app.py with frontend integration.
 
     Inserts imports at top (ruff will sort them), route at bottom,
-    and tries to patch lifespan with frontend.load().
+    and tries to patch lifespan with frontend.load(). With migrate=True,
+    pre-1.6 patching (plain Frontend, DEVMODE import) is first rewritten
+    to the current format.
 
     Returns True if patched, False if already patched or failed.
     """
@@ -612,24 +636,38 @@ def patch_app_file(path: Path, main_module_path: str, app_var: str, *, dry: bool
     original_content = path.read_text("UTF-8")
     content = original_content
 
-    # Check what's already patched
-    has_frontend = "from fastapi_vue import Frontend" in content
-    has_devmode = f"from {main_module_path} import DEVMODE" in content
+    # Migrate pre-1.6 patching to the current format: Frontend via the
+    # fastapi_vue module, DEVMODE via fastapi_vue.env
+    if migrate:
+        if "from fastapi_vue import Frontend\n" in content:
+            content = content.replace("from fastapi_vue import Frontend\n", "")
+            content = re.sub(r"(?<![\w.])Frontend\(", "fastapi_vue.Frontend(", content)
+        old_import = f"from {main_module_path} import DEVMODE"
+        if old_import in content:
+            has_plain_import = re.search(r"^import fastapi_vue$", content, re.MULTILINE)
+            content = content.replace(old_import, "" if has_plain_import else "import fastapi_vue")
+            content = content.replace("debug=DEVMODE", "debug=fastapi_vue.env.dev")
+
+    # Check what's already patched; plain "Frontend(" so user modifications
+    # of the integration (renames, different call shape) still count
+    has_frontend = "Frontend(" in content
     has_debug_arg = re.search(r"FastAPI\s*\([^)]*debug\s*=", content) is not None
     has_lifespan = "await frontend.load()" in content
 
-    if has_frontend and has_devmode and has_debug_arg and has_lifespan:
+    already_patched = has_frontend and has_debug_arg and has_lifespan
+    if content == original_content and already_patched:
         print(f"✔️  {path} (already patched)")
         return False
 
     route_line = f'frontend.route({app_var}, "/")'
 
-    # Add missing imports (using AST to find correct insertion point)
+    # Add missing imports (using AST to find correct insertion point);
+    # every patch path uses fastapi_vue.*, so always ensure the plain import
     imports = []
     if not has_frontend:
-        imports.extend(["from pathlib import Path", "from fastapi_vue import Frontend"])
-    if not has_devmode:
-        imports.append(f"from {main_module_path} import DEVMODE")
+        imports.append("from pathlib import Path")
+    if not re.search(r"^import fastapi_vue$", content, re.MULTILINE):
+        imports.append("import fastapi_vue")
     if imports:
         insert_line = find_import_insertion_line(content)
         lines = content.splitlines(keepends=True)
@@ -664,14 +702,14 @@ def patch_app_file(path: Path, main_module_path: str, app_var: str, *, dry: bool
         lines.append(route_line)
         content = "\n".join(lines)
 
-    # Try to patch FastAPI() call with debug=DEVMODE if no debug arg exists
+    # Try to patch FastAPI() call with debug=fastapi_vue.env.dev if no debug arg exists
     if not has_debug_arg:
         fastapi_pattern = r"(\w+\s*=\s*FastAPI\s*\()([^)]*)\)"
         for match in re.finditer(fastapi_pattern, content, re.DOTALL):
             args = match.group(2)
             if "debug" not in args:
-                # Add debug=DEVMODE as last argument
-                new_args = f"{args}, debug=DEVMODE" if args.strip() else "debug=DEVMODE"
+                # Add debug=fastapi_vue.env.dev as last argument
+                new_args = (f"{args}, " if args.strip() else "") + "debug=fastapi_vue.env.dev"
                 content = (
                     content[: match.start()]
                     + match.group(1)
@@ -1316,7 +1354,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
     # Check if project already has a CLI entrypoint in pyproject.toml
     existing_cli_module = _find_existing_cli_module_path(project_dir, module_name)
 
-    # Determine main module path for DEVMODE import
+    # Determine main module path (for migrating old DEVMODE imports)
     main_module_path = existing_cli_module or f"{module_name}.__main__"
     if existing_cli_module:
         print(f"ℹ️  Using existing CLI: {existing_cli_module}")
@@ -1463,7 +1501,9 @@ def cmd_setup(args: argparse.Namespace) -> int:
     # === Handle app module ===
     if app_file:
         # Existing app: patch with import, route, and try to patch lifespan
-        patch_app_file(app_file, main_module_path, app_var, dry=dry)
+        patch_app_file(
+            app_file, main_module_path, app_var, migrate=needs_app_migration(project_dir), dry=dry
+        )
     else:
         # No app: create full app.py
         # Create __init__.py if missing
@@ -1509,7 +1549,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         )
     else:
         # Existing CLI entrypoint: write our template as .new.py beside the existing module
-        # and also patch the existing module with DEVMODE if needed
+        # and also patch the existing module with FASTAPI_VUE setup if needed
         _write_fallback_file(
             main,
             main_fallback,
@@ -1519,8 +1559,8 @@ def cmd_setup(args: argparse.Namespace) -> int:
         )
         if main.exists():
             content = main.read_text("UTF-8")
-            if "DEVMODE" not in content:
-                new_content = _add_devmode_to_main(content)
+            if "FASTAPI_VUE" not in content:
+                new_content = _add_env_prefix_to_main(content)
                 new_file = main.with_suffix(".new.py")
                 _write_fallback_file(
                     main,

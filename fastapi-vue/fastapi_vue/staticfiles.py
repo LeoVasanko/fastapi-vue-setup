@@ -19,6 +19,8 @@ from starlette.exceptions import HTTPException
 from starlette.routing import Route
 from zstandard import ZstdCompressor
 
+from .environ import env
+
 logger = logging.getLogger("uvicorn.error")  # Use FastAPI logging style
 
 __all__ = ["Frontend"]
@@ -287,7 +289,8 @@ class Frontend:
 
 def _devmode_respond(_request: Request, _name: str = "") -> JSONResponse:
     """Return error response directing to Vite server."""
+    at = f" at {env.vite_url}" if env.vite_url else ""
     return JSONResponse(
         status_code=409,
-        content={"detail": "[devmode] Use Vite devserver instead."},
+        content={"detail": f"[devmode] Use Vite devserver{at} instead."},
     )

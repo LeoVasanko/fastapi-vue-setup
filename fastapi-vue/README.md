@@ -68,3 +68,13 @@ server.run("my_app.app:app", listen=["localhost:8000"])
 ```
 
 - As a deployment option, environment `FORWARDED_ALLOW_IPS` controls `X-Forwarded` trusted IPs (default: `127.0.0.1,::1`).
+
+## Environment variables
+
+The generated project entry point sets `FASTAPI_VUE` to the project's environment prefix (e.g. `MY_APP`), and settings are passed as `<PREFIX>_*` variables. `fastapi_vue.env` resolves them, lazily on each access:
+
+- `fastapi_vue.env.dev` — running under the devserver (`<PREFIX>_DEV=1`)
+- `fastapi_vue.env.vite_url`, `fastapi_vue.env.backend_url` — URLs set by the devserver
+- `fastapi_vue.env.prefix` — the prefix itself
+
+Value accessors return `None` when `FASTAPI_VUE` or the variable is not set.
