@@ -21,10 +21,12 @@ from fastapi_vue import Frontend
 
 frontend = Frontend(Path(__file__).with_name("frontend-build"), spa=True)
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await frontend.load()
     yield
+
 
 app = FastAPI(lifespan=lifespan)
 

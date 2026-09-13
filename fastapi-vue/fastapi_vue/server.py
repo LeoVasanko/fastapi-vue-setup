@@ -35,14 +35,19 @@ if "FORCE_COLOR" not in os.environ and use_color():
 logger = logging.getLogger(__name__)
 
 _WILDCARD_HOSTS = frozenset({"0.0.0.0", "::"})  # noqa: S104
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1"})
+
+
+def _bind_hosts(host: str) -> list[str]:
+    """Addresses bound for a configured host; localhost binds both loopbacks."""
+    return sorted(_LOOPBACK_HOSTS) if host == "localhost" else [host]
 
 
 def _connect_url(endpoints: list[dict]) -> str:
-    """Return a URL the user can connect to for the first TCP endpoint.
-
-    Wildcard binds (0.0.0.0, ::) are shown as localhost, as that is the
-    address a user can actually open. Returns "" for unix-socket-only setups.
-    """
+    """Return a URL the user can connect to for the first TCP endpoint."""
+    for key, value in sorted(os.environ.items()):
+        if key.endswith("_VITE_URL") and value:
+            return value
     for endpoint in endpoints:
         host = endpoint.get("host")
         if host is None:
@@ -52,16 +57,34 @@ def _connect_url(endpoints: list[dict]) -> str:
         elif ":" in host:  # IPv6 literal
             host = f"[{host}]"
         return f"http://{host}:{endpoint['port']}"
-    return ""
+    return "http://localhost"
 
 
-def _print_startup_box(template: str, app: str, endpoints: list[dict]) -> None:
+def _listen_addresses(endpoints: list[dict]) -> str:
+    """Return space-separated listen addresses as bound (host:port or uds path).
+
+    localhost is expanded to both loopbacks, matching the actual binds.
+    """
+    parts = []
+    for ep in endpoints:
+        if "uds" in ep:
+            parts.append(ep["uds"])
+            continue
+        for addr in _bind_hosts(ep["host"]):
+            shown = f"[{addr}]" if ":" in addr else addr  # bracket IPv6 literals
+            parts.append(f"{shown}:{ep['port']}")
+    return " ".join(dict.fromkeys(parts))
+
+
+def print_startup_box(template: str, app: str, endpoints: list[dict]) -> None:
     """Format the startup box template and print it.
 
     Available fields: ``{module}`` (top-level package of the app path),
     ``{name}`` (module with spaces instead of underscores), ``{Name}``
     (also capitalized), ``{version}`` (from installed package metadata,
-    "dev" when not installed) and ``{url}``.
+    "dev" when not installed), ``{listen}`` (space-separated listen
+    addresses as bound, localhost expanded to both loopbacks) and ``{url}``
+    (vite devserver URL when set, else the first connectable backend URL).
     """
     module = app.split(":", 1)[0].split(".", 1)[0]
     name = module.replace("_", " ")
@@ -74,6 +97,7 @@ def _print_startup_box(template: str, app: str, endpoints: list[dict]) -> None:
         "name": name,
         "Name": name.title(),
         "version": version,
+        "listen": _listen_addresses(endpoints),
         "url": _connect_url(endpoints),
     }
     print_box(template.format_map(values))
@@ -104,7 +128,7 @@ def run(  # noqa: PLR0913
         access_log: Enable our colored HTTP/WebSocket access logging middleware
             (uvicorn's own access logging is always bypassed).
         startup_box: Template for the startup box printed to stderr before
-            serving (see _print_startup_box for fields), None to not print it.
+            serving (see print_startup_box for fields), None to not print it.
         log_config: Logging config passed to uvicorn. Dict configs are patched
             best-effort (see fastapi_vue.logging.patch_log_config): tracerite
             loading and WebSocket chatter filtering are always installed, and
@@ -118,7 +142,7 @@ def run(  # noqa: PLR0913
         raise ValueError(msg)
 
     if startup_box:
-        _print_startup_box(startup_box, app, endpoints)
+        print_startup_box(startup_box, app, endpoints)
 
     if isinstance(reload, Path):
         uvicorn_config["reload_dirs"] = [str(reload)]
@@ -175,8 +199,7 @@ def _bind_sockets(endpoints: list[dict]) -> list[socket.socket]:
             continue
 
         host, port = ep["host"], ep["port"]
-        hosts = ("127.0.0.1", "::1") if host == "localhost" else (host,)
-        for addr in hosts:
+        for addr in _bind_hosts(host):
             if (addr, port) in seen:
                 continue
             seen.add((addr, port))
