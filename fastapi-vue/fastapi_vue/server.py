@@ -118,7 +118,7 @@ def run(  # noqa: PLR0913
     reload: bool | Path = False,
     workers: int | None = None,
     access_log: bool = True,
-    startup_box: str | None = "{Name} {version}\n{url}",
+    startup_box: str | None = "{Name} {version} @ {listen}\n{url}",
     log_config: Any = uvicorn.config.LOGGING_CONFIG,  # noqa: ANN401
     **uvicorn_config: Any,  # noqa: ANN401
 ) -> None:
