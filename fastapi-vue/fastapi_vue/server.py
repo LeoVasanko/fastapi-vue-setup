@@ -4,6 +4,7 @@ import asyncio
 import importlib.metadata
 import logging
 import os
+import socket
 from contextlib import suppress
 from pathlib import Path
 from typing import Any
@@ -11,6 +12,8 @@ from typing import Any
 import tracerite
 import uvicorn
 from uvicorn import Config, Server
+from uvicorn.main import STARTUP_FAILURE
+from uvicorn.supervisors import ChangeReload, Multiprocess
 
 from .hostutil import parse_endpoints
 from .logging import (
@@ -143,6 +146,68 @@ def run(  # noqa: PLR0913
             asyncio.run(serve(endpoints, **conf))
 
 
+def _bind_sockets(endpoints: list[dict]) -> list[socket.socket]:
+    """Bind sockets for all endpoints, expanding localhost to both loopbacks.
+
+    localhost is bound as 127.0.0.1 and ::1 explicitly, so resolver quirks
+    (notably Windows resolving localhost to ::1 only) cannot make the server
+    unreachable. Addresses that cannot be bound (e.g. IPv6 unavailable) are
+    skipped with a warning; exits only if nothing could be bound.
+    """
+    sockets: list[socket.socket] = []
+    seen: set = set()
+    for ep in endpoints:
+        if "uds" in ep:
+            uds = ep["uds"]
+            if uds in seen:
+                continue
+            seen.add(uds)
+            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            try:
+                sock.bind(uds)
+                Path(uds).chmod(0o666)
+            except OSError as e:
+                logger.warning("Could not bind unix socket %s: %s", uds, e)
+                sock.close()
+                continue
+            sock.set_inheritable(True)
+            sockets.append(sock)
+            continue
+
+        host, port = ep["host"], ep["port"]
+        hosts = ("127.0.0.1", "::1") if host == "localhost" else (host,)
+        for addr in hosts:
+            if (addr, port) in seen:
+                continue
+            seen.add((addr, port))
+            family = socket.AF_INET6 if ":" in addr else socket.AF_INET
+            sock = socket.socket(family, socket.SOCK_STREAM)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            if family == socket.AF_INET6:
+                with suppress(OSError):
+                    sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+            try:
+                sock.bind((addr, port))
+            except OSError as e:
+                logger.warning("Could not bind %s:%d: %s", addr, port, e)
+                sock.close()
+                continue
+            sock.set_inheritable(True)
+            sockets.append(sock)
+
+    if not sockets:
+        logger.error("Could not bind any endpoint")
+        raise SystemExit(STARTUP_FAILURE)
+    return sockets
+
+
+def _remove_uds_files(endpoints: list[dict]) -> None:
+    """Remove unix socket files we created (mirrors uvicorn.run cleanup)."""
+    for ep in endpoints:
+        if "uds" in ep:
+            Path(ep["uds"]).unlink(missing_ok=True)
+
+
 async def serve(endpoints: list[dict], **kwargs: Any) -> None:  # noqa: ANN401
     """Serve the given endpoints in current process/loop. Does not spawn extra processes."""
     forbidden = {"reload", "workers"} & {k for k, v in kwargs.items() if v}
@@ -151,16 +216,21 @@ async def serve(endpoints: list[dict], **kwargs: Any) -> None:  # noqa: ANN401
             "Options %s have no effect in simple mode (multiple endpoints)",
             ", ".join(sorted(forbidden)),
         )
-    await asyncio.gather(*(Server(Config(**kwargs, **ep)).serve() for ep in endpoints))
+    try:
+        await Server(Config(**kwargs)).serve(sockets=_bind_sockets(endpoints))
+    finally:
+        _remove_uds_files(endpoints)
 
 
 def serve_multiprocess(endpoints: list[dict], **kwargs: Any) -> None:  # noqa: ANN401
-    """Serve using uvicorn.run() for reload/workers support. Only first endpoint is used."""
-    if len(endpoints) > 1:
-        eps = [ep["uds"] if "uds" in ep else f"{ep['host']}:{ep['port']}" for ep in endpoints]
-        logger.warning(
-            "Current mode supports only one endpoint. Listening: %s, skipped: %s",
-            eps[0],
-            " ".join(eps[1:]),
-        )
-    uvicorn.run(**kwargs, **endpoints[0])
+    """Serve using uvicorn supervisors for reload/workers support."""
+    config = Config(**kwargs)
+    server = Server(config)
+    sockets = _bind_sockets(endpoints)
+    try:
+        if config.should_reload:
+            ChangeReload(config, target=server.run, sockets=sockets).run()
+        else:
+            Multiprocess(config, sockets=sockets).run()
+    finally:
+        _remove_uds_files(endpoints)

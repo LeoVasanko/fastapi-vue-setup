@@ -57,7 +57,7 @@ Dev-mode behavior with `FastAPI(debug=True)`: requests error HTTP 409 with a mes
 
 ## Server runner
 
-When you need more flexibility than `fastapi` CLI can provide (e.g. CLI arguments to your own program), you may use this convenience to run FastAPI app with Uvicorn startup on given `listen` endpoints. Runs in the same process if possible but delegates to `uvicorn.run()` for auto-reloads and multiple workers. This would typically be called from your CLI main, which can set its own env variables to pass information to the FastAPI instances that run (Python imports only work in same-process mode).
+When you need more flexibility than `fastapi` CLI can provide (e.g. CLI arguments to your own program), you may use this convenience to run FastAPI app with Uvicorn startup on given `listen` endpoints. Runs in the same process if possible but delegates to uvicorn supervisors for auto-reloads and multiple workers. `localhost` binds both 127.0.0.1 and ::1, so the server stays reachable regardless of how the name resolves. This would typically be called from your CLI main, which can set its own env variables to pass information to the FastAPI instances that run (Python imports only work in same-process mode).
 
 ```python
 from fastapi_vue import server
