@@ -8,11 +8,11 @@
  * - Disables Vite's screen clearing on startup
  *
  * Options:
- *   paths - Array of paths to proxy (default: ["/api"])
+ *   paths - Array of paths to proxy (default: ['/api'])
  */
 
-export default function fastapiVue({ paths = ["/api"] } = {}) {
-  const backendUrl = process.env.ENVPREFIX_BACKEND_URL || "http://localhost:TEMPLATE_DEV_PORT"
+export default function fastapiVue({ paths = ['/api'] } = {}) {
+  const backendUrl = process.env.ENVPREFIX_BACKEND_URL || 'http://localhost:TEMPLATE_DEV_PORT'
 
   // Build proxy configuration for each path
   const proxy = {}
@@ -25,12 +25,12 @@ export default function fastapiVue({ paths = ["/api"] } = {}) {
   }
 
   return {
-    name: "vite-plugin-fastapi-MODULE_NAME",
+    name: 'vite-plugin-fastapi-MODULE_NAME',
     config: () => ({
       clearScreen: false,
       server: { proxy },
       build: {
-        outDir: "../MODULE_NAME/frontend-build",
+        outDir: '../MODULE_NAME/frontend-build',
         emptyOutDir: true,
       },
     }),
