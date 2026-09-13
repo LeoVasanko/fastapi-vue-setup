@@ -1,18 +1,22 @@
 # ruff: noqa: INP001
 """Utilities meant for devserver script, used only in source repository with dev deps."""
 
+from __future__ import annotations
+
 import asyncio
 import sys
 from asyncio.subprocess import Process
-from collections.abc import Awaitable
 from contextlib import suppress
 from pathlib import Path
 from subprocess import CalledProcessError
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 
 from buildutil import find_dev_tool, find_install_tool, logger
 from fastapi_vue.hostutil import parse_endpoint
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable
 
 
 class ProcessGroup(asyncio.TaskGroup):
