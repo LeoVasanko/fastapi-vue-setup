@@ -126,7 +126,7 @@ async def ready(url: str, path: str = "", max_attempts: int = 50) -> None:
     """Wait for the server to be ready by polling an endpoint.
 
     Use empty path to disable the check and make this return immediately.
-    Raises TimeoutError if server doesn't start in time.
+    Logs, then raises RuntimeError if the server doesn't start in time.
     """
     if not path:
         return
@@ -136,7 +136,8 @@ async def ready(url: str, path: str = "", max_attempts: int = 50) -> None:
             logger.info("✓ Backend ready!")
             return
         if attempt == max_attempts - 1:
-            raise TimeoutError(f"Backend at {url} didn't start in time")  # noqa: EM102, TRY003
+            logger.error("Backend at %s didn't start in time", url)
+            raise RuntimeError(url)
         await asyncio.sleep(0.1)
 
 
