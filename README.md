@@ -1,3 +1,5 @@
+![FastAPI-Vue setup complete](https://raw.githubusercontent.com/LeoVasanko/fastapi-vue-setup/main/docs/banner.webp)
+
 # FastAPI-Vue Full Stack Setup
 
 Build and develop **FastAPI + Vue** as a single project, while keeping production purely Python — **JavaScript tooling is only needed during development!**
@@ -29,6 +31,8 @@ Or install as a proper executable:
 uv tool install dist/my_app-0.1.0.tar.gz
 my-app --help
 ```
+
+<img src="https://raw.githubusercontent.com/LeoVasanko/fastapi-vue-setup/main/docs/hello.webp" alt='"You did it" with Vue-FastAPI connection.' width="500">
 
 ## Working in your project
 
