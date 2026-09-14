@@ -1,96 +1,127 @@
-# fastapi-vue-setup
+# FastAPI-Vue Full Stack Setup
 
-Create or patch a FastAPI + Vue project with an integrated dev/build workflow.
+Build and develop **FastAPI + Vue** as a single project, while keeping production purely Python — **JavaScript tooling is only needed during development!**
 
-- Development: one command runs Vite + FastAPI (reloads)
-- Production: `uv build` bakes the built Vue assets into the Python package (no Node/JS runtime needed to *run* the installed package)
+Unlike a template repository or a tutorial, the setup adapts to the application you already have and can keep that integration up to date as the stack evolves. It also fills in the practical gaps around FastAPI itself, providing a production-ready application runtime with a CLI command to start the server with integrated pretty logging and tracebacks — giving your project a running start.
+
+Start a new project with your preferred setup, integrate an existing FastAPI or Vue codebase, or upgrade an already integrated project to the latest simply by running the script.
 
 ## Quick start
 
-Install [UV](https://docs.astral.sh/uv/) and any JS runtime (node, deno, or bun).
-
-This README uses `my-app` as the example project name:
-
-- project directory: `my-app/`
-- Python module: `my_app`
-- env prefix: `MY_APP`
-- CLI command: `my-app`
-
-Create a new project in `./my-app`:
-
-```sh
+Install [UV](https://docs.astral.sh/uv/getting-started/installation/) and Node ([nvm](https://github.com/nvm-sh/nvm#installing-and-updating)), and create your project:
+```
 uvx fastapi-vue-setup my-app
 ```
 
-Once in your source tree, you will typically use `.` for the path. If there is an existing project, `fastapi-vue-setup` will do its best to find and patch a backend module and create or patch a Vue project in `frontend/`. The integration can be upgraded by running a new version of `fastapi-vue-setup` on it, preserving earlier default ports and user customizations.
+Inside the new project, start the development server with live reloads and debug aids:
+```sh
+uv run scripts/devserver.py
+```
 
-## In your project
+Or build a release package, and run anywhere:
+```sh
+uv build  # a dist Python package
+uvx --with dist/my_app-0.1.0.tar.gz my-app --help
+```
 
-ℹ️ Everything below is meant to be run within your project source tree.
+Or install as a proper executable:
+```sh
+uv tool install dist/my_app-0.1.0.tar.gz
+my-app --help
+```
 
-The setup creates a CLI entry for your package, so that it becomes a command to run, not a Python module nor `fastapi myapp...`. The CLI main can be customized, although --listen should be kept for devserver compatibility.
+## Working in your project
 
-You can choose the JS runtime with environment `JS_RUNTIME` (e.g. `node`, `deno`, `bun`, or path to one). This is used by the build and the devserver scripts. By default any available runtime on the system is chosen.
+### Setup and upgrades
+
+The setup command handles new projects, existing FastAPI or Vue projects, and projects previously configured by an older version. Use a project directory to create or migrate it, or `.` when already inside the source tree:
+
+```sh
+uvx fastapi-vue-setup [project-dir] [options]
+```
+
+| Option                     | Purpose                                                                                                      |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `--module-name NAME`       | Override the Python module name, normally detected automatically                                             |
+| `--ports BACKEND,VITE,DEV` | Set the production backend, development frontend and development backend ports; defaults to `3100,3100,3200` |
+| `--health PATH`            | Endpoint used to wait for the development backend to become ready; use `--health=""` to disable the check    |
+| `--dry`, `--dry-run`       | Preview the changes without modifying the project                                                            |
+| `--version`                | Print the setup version                                                                                      |
+| `-- ARGS`                  | Pass the remaining arguments to `create-vue` when a frontend needs to be created non-interactively           |
+
+Existing projects are inspected rather than replaced: the Python module, FastAPI application, CLI entry point and Vue project are reused where found, with missing pieces created as needed. Running a newer setup version on the project upgrades the generated integration while retaining configured ports and health checks unless explicitly overridden.
+
+ℹ️ Generated files marked `auto-upgrade@fastapi-vue-setup` may be refreshed automatically on later runs. Remove that marker when taking ownership of a generated file; where an updated version is still useful, the setup writes a `.new.py` file for manual merging instead of overwriting your changes. Internal files under `scripts/fastapi-vue/` belong to the setup itself and are updated automatically.
+
+### Main CLI (my-app)
+
+The setup gives your application its own CLI command. This becomes the normal way to start it, rather than invoking via FastAPI CLI or by other means, except perhaps via `uv run` or `uvx` to run the latest version directly and avoid installation completely.
+
+The generated `__main__.py` is yours to customize. Keep its `--listen` option if you want it to remain compatible with the development server that also passes arguments to your CLI entry point.
 
 ### Development server (Vite + FastAPI)
 
 ```sh
-uv run scripts/devserver.py [args]
+scripts/devserver.py [args]
 ```
 
-ℹ️ Arguments are forwarded to the main CLI, except that `--listen` controls where Vite listens, and `--backend` is passed to main CLI as `--listen`.
+ℹ️ Windows users have to use `uv run scripts/devserver.py`, while Linux and Mac users can just run the script directly.
+
+This runs the Vite development server and FastAPI together, with reloads on both sides and the environment configured so they can communicate directly. Vite serves the Vue app and proxies specific paths to the FastAPI backend. The paths default to `/api/` only, and can be configured in your `vite.config.js` (or `vite.config.ts` if you chose TypeScript). In dev mode the browser only connects via Vite, and trying to load frontend assets from the backend is blocked.
+
+- `--listen` set Vite listening port
+- `--backend` set FastAPI port (forwarded as `--listen`)
+- `--help` see help; any other arguments are passed directly to your CLI
+
+JavaScript tooling is used only from the source tree, by the devserver and build commands. An available runtime is selected automatically; set `JS_RUNTIME` to `node`, `deno`, `bun`, or an executable path to choose one explicitly.
 
 ### Production
 
-Build the Python package (this compiles the Vue frontend) and run the production server:
+Building the Python package also builds the Vue frontend, ensuring the source repository has a fresh build. If you wish to run production mode in your source repo, with a fresh build:
 
-```sh
+```
 uv build && uv run my-app [args]
 ```
 
-Once happy with it, publish the package
+Publishing alike follows `uv build` and involves either copying the `dist/*.tar.gz` archive to where you need it, or `uv publish` to make it a public release that can be run directly by `uvx my-app`.
 
-```sh
-uv build && uv publish
-```
+ℹ️ Other Python build and installation methods like `pip install` work equally well, we just prefer using UV.
 
-Afterwards, you can easily run it anywhere, no JS runtimes required:
+## Project Layout
 
-```sh
-uvx my-app [args]
-```
-
-ℹ️ Instead of `uvx` you may consider `uv tool install`, oldskool `pip install` or whatever best suits you.
-
-### Vite plugin
-
-The generated Vite plugin lives in `frontend/vite-plugin-fastapi.js` and defaults to proxying `/api`.
-
-It reads `MY_APP_BACKEND_URL` to know where to proxy; if unset it falls back to your configured default backend port.
-
-## Project layout (typical)
+A newly created project typically looks like this:
 
 ```
 my-app/
-├── frontend/                    # Vue app (Vite)
+├── frontend/                       # Vue source (Node, Vite)
 │   ├── src/
-│   ├── vite-plugin-fastapi.js
+│   ├── vite-plugin-fastapi.js      # Helper plugin
+│   ├── vite.config.js              # Loads the plugin with app setup
 │   └── package.json
-├── my_app/                      # Python package
-│   ├── __main__.py              # CLI entrypoint
-│   ├── app.py                   # FastAPI app
-│   └── frontend-build/          # built assets (included in distributions)
-├── pyproject.toml
-└── scripts/
-    ├── devserver.py             # Run Vite and FastAPI together in dev mode
-    └── fastapi-vue/             # Dev utilities (only on the source tree)
-        ├── buildhook.py
-        ├── buildutil.py
-        └── devutil.py
+├── my_app/                         # Python package
+│   ├── __init__.py
+│   ├── __main__.py                 # Application CLI
+│   ├── app.py                      # FastAPI app
+│   └── frontend-build/             # Generated production frontend
+├── scripts/
+│   ├── devserver.py                # Vite + FastAPI development server
+│   └── fastapi-vue/                # Generated build/dev support
+│       ├── buildhook.py
+│       ├── buildutil.py
+│       └── devutil.py
+└── pyproject.toml
 ```
 
-## The fastapi-vue runtime module
+Existing projects retain their own layout wherever possible; this is only the default structure.
 
-The backend runs the FastAPI app and serves the frontend build using the companion package in [fastapi-vue/README.md](fastapi-vue/README.md). Your project will depend on Fastapi and this lightweight module.
+## Runtime and build tooling
 
-ℹ️ Development functionality is in `scripts/fastapi-vue/` directly in your source tree, and is not to be confused with this runtime module. Only the runtime is installed with your package.
+There are deliberately two separate pieces to the integration.
+
+The files under `scripts` written by the setup script belong to the source tree. They handle development and package building, and are not part of the Python package.
+
+The installed application instead depends on the lightweight [fastapi_vue](https://pypi.org/project/fastapi-vue/) runtime module. It serves the built frontend and provides the server runner, logging and traceback integration used by the generated application.
+
+This keeps the development tooling where it belongs while leaving the distributed application as a normal, self-contained Python package.
+
+ℹ️ The version numbering between the runtime and setup packages is synchronized, and the setup script always bumps the version in `pyproject.toml` to ensure compatible updates.
