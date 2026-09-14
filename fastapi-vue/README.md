@@ -73,14 +73,7 @@ A single `reload` argument replaces Uvicorn's separate reload arguments and may 
 
 A startup box with the app name, version and connect URL is printed before serving. Pass a `startup_box` template (`{name}`, `{version}`, `{listen}`, `{url}`, ...) to customize it, None to disable, or use `server.print_startup_box` on its own.
 
-Printed by `server.run("my_app.app:app", listen=["localhost:3100"])`:
-
-```
-╭──────────────────────────────────────────╮
-│ My App 0.1.0 @ 127.0.0.1:3100 [::1]:3100 │
-│ http://localhost:3100                    │
-╰──────────────────────────────────────────╯
-```
+<img src="https://raw.githubusercontent.com/LeoVasanko/fastapi-vue-setup/main/docs/my-app.webp" alt="My App startup box and log items" width="500">
 
 Logging is integrated as well: removes noisy uvicorn logging, replacing it with prettified log formatting, a colored access log and tracebacks rendered by [tracerite](https://pypi.org/project/tracerite/). Note that HTTP responses also include tracerite formatting when `FastAPI(debug=True)` is used.
 

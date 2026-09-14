@@ -129,3 +129,5 @@ The installed application instead depends on the lightweight [fastapi_vue](https
 This keeps the development tooling where it belongs while leaving the distributed application as a normal, self-contained Python package.
 
 ℹ️ The version numbering between the runtime and setup packages is synchronized, and the setup script always bumps the version in `pyproject.toml` to ensure compatible updates.
+
+<img src="https://raw.githubusercontent.com/LeoVasanko/fastapi-vue-setup/main/docs/my-app.webp" alt="My App startup box and log items" width="500">
