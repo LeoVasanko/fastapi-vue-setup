@@ -111,12 +111,14 @@ def ruff_format_content(
 
 
 def uv_add_packages(packages: list[str], *, cwd: Path, group: str | None = None) -> None:
-    """Add packages using uv."""
-    cmd = ["uv", "add", "-q", "-U"]
+    """Add packages using uv.
+
+    Uses --frozen so only pyproject.toml is edited, without locking or
+    syncing - those happen in a single uv sync step after all changes.
+    """
+    cmd = ["uv", "add", "-q", "--frozen"]
     if group:
         cmd.extend(["--group", group])
-    else:
-        cmd.append("--no-sync")
     cmd.extend(packages)
     result = subprocess.run(cmd, cwd=cwd, check=False)  # noqa: S603
     if result.returncode != 0:
@@ -161,7 +163,7 @@ NEW_BUILD_HOOK_PATH = "scripts/fastapi-vue/buildhook.py"
 # Frontend instantiation block for patching existing apps
 FRONTEND_BLOCK = """
 # Vue Frontend static files
-frontend = fastapi_vue.Frontend(Path(__file__).with_name("frontend-build"))
+frontend = Frontend(Path(__file__).with_name("frontend-build"))
 """
 
 # Lifespan block for patching apps that don't have one
@@ -473,6 +475,74 @@ def _find_app_in_subpackage(subpkg_dir: Path) -> tuple[Path, str] | None:
     return None
 
 
+def _migrate_devmode_in_main(content: str) -> str | None:
+    """Spot-patch the pre-1.6 DEVMODE mechanism to the FASTAPI_VUE env prefix.
+
+    Replaces `DEVMODE = os.getenv("PREFIX_DEV") == "1"` with
+    `os.environ["FASTAPI_VUE"] = "PREFIX"` and remaining DEVMODE references
+    with env.dev, ensuring env is imported from fastapi_vue.
+
+    Returns the patched content, or None if there was nothing to patch.
+    """
+    match = re.search(
+        r"^DEVMODE\s*=\s*os\.getenv\(\s*[\"']([A-Za-z0-9_]+)_DEV[\"']\s*\)\s*==\s*[\"']1[\"']",
+        content,
+        re.MULTILINE,
+    )
+    if not match:
+        return None
+    content = (
+        content[: match.start()]
+        + f'os.environ["FASTAPI_VUE"] = "{match.group(1)}"'
+        + content[match.end() :]
+    )
+    # Replace every remaining standalone DEVMODE reference (as in app.py
+    # migration, string literals are an accepted risk)
+    content = re.sub(r"(?<![\w.])DEVMODE\b", "env.dev", content)
+    if not re.search(r"^from fastapi_vue import\b.*\benv\b", content, re.MULTILINE):
+        if re.search(r"^from fastapi_vue import ", content, re.MULTILINE):
+            content = re.sub(
+                r"^from fastapi_vue import ",
+                "from fastapi_vue import env, ",
+                content,
+                count=1,
+                flags=re.MULTILINE,
+            )
+        else:
+            insert_line = find_import_insertion_line(content)
+            lines = content.splitlines(keepends=True)
+            insert_idx = insert_line - 1
+            import_text = "from fastapi_vue import env\n"
+            if insert_idx >= len(lines):
+                content = content.rstrip("\n") + "\n" + import_text
+            else:
+                content = "".join(lines[:insert_idx]) + import_text + "".join(lines[insert_idx:])
+    return content
+
+
+def _patch_main_devmode(path: Path, *, dry: bool) -> str | None:
+    """Apply _migrate_devmode_in_main to a main module in place, if needed.
+
+    Done in place even without the auto-upgrade marker: the marker guards
+    full-file overwrites, while leaving this change to a .new.py merge would
+    silently break dev mode for every customized pre-1.6 main.
+
+    Returns the migrated content if the module was (or would be) patched,
+    None if there was nothing to patch.
+    """
+    content = path.read_text("UTF-8")
+    migrated = _migrate_devmode_in_main(content)
+    if migrated is None:
+        return None
+    migrated = ruff_format_content(migrated, path, mode="isort")
+    if dry:
+        print(f"✅ Would patch {path} (DEVMODE → FASTAPI_VUE)")
+        return migrated
+    path.write_text(migrated, "UTF-8", newline="\n")
+    print(f"✅ Patched {path} (DEVMODE → FASTAPI_VUE)")
+    return migrated
+
+
 def _add_env_prefix_to_main(content: str) -> str:
     """Add FASTAPI_VUE environment prefix setup to an existing main module."""
     lines = content.splitlines()
@@ -600,10 +670,9 @@ def render_template(template: str, **kwargs: str) -> str:
 def needs_app_migration(project_dir: Path) -> bool:
     """Check if the project was set up with fastapi-vue older than 1.6.
 
-    Those versions patched app.py with `from fastapi_vue import Frontend` and
-    a DEVMODE import from the main module; 1.6+ uses fastapi_vue.Frontend and
-    fastapi_vue.env. Must be called before the dependency step rewrites the
-    fastapi-vue requirement in pyproject.toml.
+    Those versions patched app.py with a DEVMODE import from the main module;
+    1.6+ uses env.dev from fastapi_vue instead. Must be called before the
+    dependency step rewrites the fastapi-vue requirement in pyproject.toml.
     """
     pyproject = project_dir / "pyproject.toml"
     if not pyproject.exists():
@@ -624,8 +693,8 @@ def patch_app_file(
 
     Inserts imports at top (ruff will sort them), route at bottom,
     and tries to patch lifespan with frontend.load(). With migrate=True,
-    pre-1.6 patching (plain Frontend, DEVMODE import) is first rewritten
-    to the current format.
+    pre-1.6 patching (DEVMODE import from the main module) is first
+    rewritten to the current format (env.dev).
 
     Returns True if patched, False if already patched or failed.
     """
@@ -636,17 +705,18 @@ def patch_app_file(
     original_content = path.read_text("UTF-8")
     content = original_content
 
-    # Migrate pre-1.6 patching to the current format: Frontend via the
-    # fastapi_vue module, DEVMODE via fastapi_vue.env
+    # Migrate pre-1.6 patching to the current format: DEVMODE via
+    # fastapi_vue.env (the Frontend import stays as-is)
     if migrate:
-        if "from fastapi_vue import Frontend\n" in content:
-            content = content.replace("from fastapi_vue import Frontend\n", "")
-            content = re.sub(r"(?<![\w.])Frontend\(", "fastapi_vue.Frontend(", content)
         old_import = f"from {main_module_path} import DEVMODE"
         if old_import in content:
-            has_plain_import = re.search(r"^import fastapi_vue$", content, re.MULTILINE)
-            content = content.replace(old_import, "" if has_plain_import else "import fastapi_vue")
-            content = content.replace("debug=DEVMODE", "debug=fastapi_vue.env.dev")
+            # The import sort at the end merges this with any existing
+            # `from fastapi_vue import Frontend` line
+            content = content.replace(old_import, "from fastapi_vue import env")
+            # Replace every remaining standalone DEVMODE reference (not just
+            # the debug= parameter); it may also appear inside string literals,
+            # but that's an accepted risk over AST rewriting
+            content = re.sub(r"(?<![\w.])DEVMODE\b", "env.dev", content)
 
     # Check what's already patched; plain "Frontend(" so user modifications
     # of the integration (renames, different call shape) still count
@@ -662,12 +732,14 @@ def patch_app_file(
     route_line = f'frontend.route({app_var}, "/")'
 
     # Add missing imports (using AST to find correct insertion point);
-    # every patch path uses fastapi_vue.*, so always ensure the plain import
+    # the import sort at the end merges duplicate from-imports
     imports = []
     if not has_frontend:
         imports.append("from pathlib import Path")
-    if not re.search(r"^import fastapi_vue$", content, re.MULTILINE):
-        imports.append("import fastapi_vue")
+    if not has_frontend or not re.search(
+        r"^from fastapi_vue import\b.*\benv\b", content, re.MULTILINE
+    ):
+        imports.append("from fastapi_vue import Frontend, env")
     if imports:
         insert_line = find_import_insertion_line(content)
         lines = content.splitlines(keepends=True)
@@ -702,14 +774,14 @@ def patch_app_file(
         lines.append(route_line)
         content = "\n".join(lines)
 
-    # Try to patch FastAPI() call with debug=fastapi_vue.env.dev if no debug arg exists
+    # Try to patch FastAPI() call with debug=env.dev if no debug arg exists
     if not has_debug_arg:
         fastapi_pattern = r"(\w+\s*=\s*FastAPI\s*\()([^)]*)\)"
         for match in re.finditer(fastapi_pattern, content, re.DOTALL):
             args = match.group(2)
             if "debug" not in args:
-                # Add debug=fastapi_vue.env.dev as last argument
-                new_args = (f"{args}, " if args.strip() else "") + "debug=fastapi_vue.env.dev"
+                # Add debug=env.dev as last argument
+                new_args = (f"{args}, " if args.strip() else "") + "debug=env.dev"
                 content = (
                     content[: match.start()]
                     + match.group(1)
@@ -1006,6 +1078,11 @@ def _upgrade_old_vite_plugin(path: Path, module_name: str, *, dry: bool = False)
 
 # Track .new.py files written during setup (for merge notification)
 _new_files_written: list[tuple[Path, Path]] = []
+
+
+def _strip_upgrade_marker(content: str) -> str:
+    """Remove the auto-upgrade marker line, for content comparison."""
+    return "\n".join(line for line in content.splitlines() if UPGRADE_MARKER not in line)
 
 
 def write_file(
@@ -1531,14 +1608,26 @@ def cmd_setup(args: argparse.Namespace) -> int:
     main_content = render_template(template, **tpl_vars)
 
     if main_file.exists():
-        # File exists: update if it has the auto-upgrade marker, otherwise use fallback
-        write_file(
-            main_file,
-            main_content,
-            overwrite=True,
-            dry=dry,
-            fallback_path=main_fallback,
-        )
+        # Spot-patch the pre-1.6 DEVMODE mechanism in place first - the
+        # auto-upgrade marker guards full-file overwrites, but leaving this
+        # change to a .new.py merge would silently break dev mode
+        migrated = _patch_main_devmode(main_file, dry=dry)
+        existing = migrated if migrated is not None else main_file.read_text("UTF-8")
+        # Update if it has the auto-upgrade marker, otherwise use fallback -
+        # unless the markerless file is otherwise up to date (e.g. the
+        # DEVMODE spot-patch was the only change), then no fallback is needed
+        if UPGRADE_MARKER not in existing and _strip_upgrade_marker(
+            existing
+        ) == _strip_upgrade_marker(ruff_format_content(main_content, main_file)):
+            print(f"✔️  {main_file} (already up to date)")
+        else:
+            write_file(
+                main_file,
+                main_content,
+                overwrite=True,
+                dry=dry,
+                fallback_path=main_fallback,
+            )
     elif not existing_cli_module:
         # No file and no existing entrypoint: create new __main__.py
         write_file(
@@ -1558,7 +1647,8 @@ def cmd_setup(args: argparse.Namespace) -> int:
             executable=False,
         )
         if main.exists():
-            content = main.read_text("UTF-8")
+            migrated = _patch_main_devmode(main, dry=dry)
+            content = migrated if migrated is not None else main.read_text("UTF-8")
             if "FASTAPI_VUE" not in content:
                 new_content = _add_env_prefix_to_main(content)
                 new_file = main.with_suffix(".new.py")
@@ -1651,9 +1741,16 @@ def cmd_setup(args: argparse.Namespace) -> int:
     fastapi_vue_req = f"fastapi-vue~={mmp[1]}.{mmp[2]}.{mmp[3]}" if mmp else "fastapi-vue"
     if dry:
         print(f"📦 Would add: fastapi[standard], {fastapi_vue_req}")
+        print("📦 Would run: uv sync")
     else:
         print("📦 Dependencies")
         uv_add_packages(["fastapi[standard]", fastapi_vue_req], cwd=project_dir)
+        # uv add runs with --frozen, so lock and sync the environment once
+        # everything is in place; attached to the terminal so the user sees
+        # the updates, and non-fatal - setup is complete either way
+        result = subprocess.run(["uv", "sync"], cwd=project_dir, check=False)  # noqa: S607
+        if result.returncode != 0:
+            print("⚠️  uv sync failed - run it manually to update the environment")
 
     print()
     print_boxed("Setup complete!")
