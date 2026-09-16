@@ -81,6 +81,14 @@ Other arguments are generally passed to `uvicorn.run`, although some like `log_c
 
 > As a deployment option, environment `FORWARDED_ALLOW_IPS` controls `X-Forwarded` trusted IPs (default: `127.0.0.1,::1` works for typical setups).
 
+### Logging
+
+As a framework we configure basic logging for you: the root logger prints through our emoji-level-prefixed formatting, at INFO in dev mode and WARNING in production — so library chatter stays silent in production, matching Python's own default. On top of that we only add narrow overrides: uvicorn's routine chatter is filtered out, `watchfiles.main` is lifted to WARNING (reload notices still show), and our access log gets its own colored format.
+
+Your code and libraries just use ordinary loggers (`logging.getLogger(...)`); they inherit the root level automatically. If a module wants a different level than that — quieter *or* more verbose — set it on that module's own logger, not on root.
+
+Unlike stock FastAPI/uvicorn, where the root logger is left handlerless (swallowing `logging.info()` from app code) and uvicorn logs startup/shutdown chatter at INFO, here app logging just works and the output stays terse.
+
 ### Environment (fastapi_vue.env)
 
 We use environment variables to pass values between program components, from devserver script setting dev mode and telling backend and frontend URLs, to your CLI, which in turn runs the FastAPI app that may also need access to this information. The variables are prefixed by the current application name to avoid conflicts. The CLI entry point should set one like `os.environ["FASTAPI_VUE"] = "MY_APP"`, before using `server.run`
