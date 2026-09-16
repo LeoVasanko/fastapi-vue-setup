@@ -21,7 +21,7 @@ from zstandard import ZstdCompressor
 
 from .environ import env
 
-logger = logging.getLogger("uvicorn.error")  # Use FastAPI logging style
+logger = logging.getLogger(__name__)
 
 __all__ = ["Frontend"]
 

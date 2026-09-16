@@ -31,6 +31,7 @@ if TYPE_CHECKING:
     from uvicorn.lifespan.on import LifespanSendMessage
 
 from .accesslog import AccessLogMiddleware
+from .environ import env
 
 ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
 
@@ -312,7 +313,8 @@ def patch_log_config(log_config, *, access_log: bool = True):  # noqa: ANN001, A
     routine INFO lines, an emoji-level-prefix Formatter in place of
     uvicorn's stock ``default`` formatter (a user-supplied one wins), a root
     logger entry so ``logging.info()`` et al. print through the default
-    handler, and a no-prefix ``kanta`` logger entry (likewise).  The
+    handler, at INFO in dev and WARNING in production (matching Python's
+    default).  The
     ``watchfiles.main`` logger is lifted to WARNING so its INFO "N changes
     detected" line is dropped while the WARNING "Reloading..." line (logged
     to ``uvicorn.error``) still shows; a user-supplied level wins.
@@ -355,9 +357,11 @@ def patch_log_config(log_config, *, access_log: bool = True):  # noqa: ANN001, A
 
     # uvicorn's default config leaves the root logger handlerless, eating
     # logging.info() et al.; route root through uvicorn's default handler.
+    # Level is WARNING in production so third-party loggers stay quiet, as
+    # with Python's default; dev keeps INFO.  Subloggers can override.
     with suppress(Exception):
         root = config.setdefault("root", {})
-        root.setdefault("level", "INFO")
+        root.setdefault("level", "INFO" if env.dev else "WARNING")
         root_handlers = root.setdefault("handlers", [])
         if "default" not in root_handlers:
             root_handlers.append("default")
@@ -367,23 +371,6 @@ def patch_log_config(log_config, *, access_log: bool = True):  # noqa: ANN001, A
     with suppress(Exception):
         config.setdefault("loggers", {}).setdefault("watchfiles.main", {}).setdefault(
             "level", "WARNING"
-        )
-
-    # kanta-style output (diffs, colored headers) prints without prefixes,
-    # like our access log.  A user-supplied "kanta" logger entry wins.
-    with suppress(Exception):
-        config["formatters"].setdefault("plain", {"fmt": "%(message)s"})
-        config["handlers"].setdefault(
-            "plain",
-            {
-                "class": "logging.StreamHandler",
-                "formatter": "plain",
-                "stream": "ext://sys.stderr",
-            },
-        )
-        config.setdefault("loggers", {}).setdefault(
-            "kanta",
-            {"handlers": ["plain"], "level": "INFO", "propagate": False},
         )
 
     if access_log:
