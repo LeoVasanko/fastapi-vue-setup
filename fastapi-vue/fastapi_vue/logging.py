@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Literal
 import tracerite
 from starlette.middleware.errors import ServerErrorMiddleware
 from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
-from uvicorn.config import Config
+from uvicorn.config import LOGGING_CONFIG, Config
 from uvicorn.lifespan.on import LifespanOn
 
 if TYPE_CHECKING:
@@ -299,13 +299,25 @@ def patch_server_error_middleware() -> None:
     ServerErrorMiddleware.error_response = error_response  # type: ignore[method-assign]
 
 
+def _merge_log_config(base: dict, overlay: dict) -> dict:
+    """Deep-merge *overlay* onto *base*; dicts merge recursively, others replace."""
+    for key, value in overlay.items():
+        if isinstance(value, dict) and isinstance(base.get(key), dict):
+            _merge_log_config(base[key], value)
+        else:
+            base[key] = value
+    return base
+
+
 def patch_log_config(log_config, *, access_log: bool = True):  # noqa: ANN001, ANN201
     """Patch a uvicorn log_config dict for our logging, best-effort.
 
-    Users presumably base their config on uvicorn's default dict, but any
-    shape is tolerated: pieces that do not fit the config's structure are
-    silently skipped.  Non-dict configs (e.g. an ini file path) pass through
-    untouched.
+    A dict without a ``version`` key is treated as a partial config: it is
+    merged over uvicorn's default dict, so only the customizations are
+    needed (e.g. ``{"loggers": {"kanta": {"level": "DEBUG"}}}``).  A dict
+    with ``version`` is a complete config used as-is; pieces that do not
+    fit its structure are silently skipped.  Non-dict configs (e.g. an ini
+    file path) pass through untouched.
 
     Always adds an unreferenced NullHandler whose Formatter instantiation
     loads tracerite in every process uvicorn applies the config in, filters
@@ -313,8 +325,8 @@ def patch_log_config(log_config, *, access_log: bool = True):  # noqa: ANN001, A
     routine INFO lines, an emoji-level-prefix Formatter in place of
     uvicorn's stock ``default`` formatter (a user-supplied one wins), a root
     logger entry so ``logging.info()`` et al. print through the default
-    handler, at INFO in dev and WARNING in production (matching Python's
-    default).  The
+    handler when one exists, at INFO in dev and WARNING in production
+    (matching Python's default).  The
     ``watchfiles.main`` logger is lifted to WARNING so its INFO "N changes
     detected" line is dropped while the WARNING "Reloading..." line (logged
     to ``uvicorn.error``) still shows; a user-supplied level wins.
@@ -327,6 +339,8 @@ def patch_log_config(log_config, *, access_log: bool = True):  # noqa: ANN001, A
     if not isinstance(log_config, dict):
         return log_config
     config = deepcopy(log_config)
+    if "version" not in config:
+        config = _merge_log_config(deepcopy(LOGGING_CONFIG), config)
 
     with suppress(Exception):
         config["formatters"]["fastapi_vue"] = {"()": "fastapi_vue.logging.Formatter"}
@@ -348,7 +362,7 @@ def patch_log_config(log_config, *, access_log: bool = True):  # noqa: ANN001, A
     # default formatter; a user-supplied default formatter is left alone.
     with suppress(Exception):
         default = config["formatters"]["default"]
-        if default.get("()") in (None, "uvicorn.logging.DefaultFormatter"):
+        if default == LOGGING_CONFIG["formatters"]["default"]:
             config["formatters"]["default"] = {
                 "()": "fastapi_vue.logging.Formatter",
                 "fmt": "%(message)s",
@@ -362,9 +376,10 @@ def patch_log_config(log_config, *, access_log: bool = True):  # noqa: ANN001, A
     with suppress(Exception):
         root = config.setdefault("root", {})
         root.setdefault("level", "INFO" if env.dev else "WARNING")
-        root_handlers = root.setdefault("handlers", [])
-        if "default" not in root_handlers:
-            root_handlers.append("default")
+        if "default" in config.get("handlers", {}):
+            root_handlers = root.setdefault("handlers", [])
+            if "default" not in root_handlers:
+                root_handlers.append("default")
 
     # watchfiles logs "N changes detected" to its own logger at INFO; only the
     # WARNING "Reloading..." line (uvicorn.error) should show.

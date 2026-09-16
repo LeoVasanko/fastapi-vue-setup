@@ -75,19 +75,16 @@ A startup box with the app name, version and connect URL is printed before servi
 
 <img src="https://raw.githubusercontent.com/LeoVasanko/fastapi-vue-setup/main/docs/my-app.webp" alt="My App startup box and log items" width="500">
 
-Logging is integrated as well: removes noisy uvicorn logging, replacing it with prettified log formatting, a colored access log and tracebacks rendered by [tracerite](https://pypi.org/project/tracerite/). Note that HTTP responses also include tracerite formatting when `FastAPI(debug=True)` is used.
-
 Other arguments are generally passed to `uvicorn.run`, although some like `log_config` receive our modifications.
 
 > As a deployment option, environment `FORWARDED_ALLOW_IPS` controls `X-Forwarded` trusted IPs (default: `127.0.0.1,::1` works for typical setups).
 
-### Logging
 
-As a framework we configure basic logging for you: the root logger prints through our emoji-level-prefixed formatting, at INFO in dev mode and WARNING in production — so library chatter stays silent in production, matching Python's own default. On top of that we only add narrow overrides: uvicorn's routine chatter is filtered out, `watchfiles.main` is lifted to WARNING (reload notices still show), and our access log gets its own colored format.
+### Logging and exceptions
 
-Your code and libraries just use ordinary loggers (`logging.getLogger(...)`); they inherit the root level automatically. If a module wants a different level than that — quieter *or* more verbose — set it on that module's own logger, not on root.
+Pretty logging is configured automatically across the host process and all workers, at INFO in development and WARNING in production, with emoji level prefixes, colored access logs, and tracebacks rendered by [tracerite](https://pypi.org/project/tracerite/). With `FastAPI(debug=True)`, **Internal Server Error** responses use tracerite formatting as well.
 
-Unlike stock FastAPI/uvicorn, where the root logger is left handlerless (swallowing `logging.info()` from app code) and uvicorn logs startup/shutdown chatter at INFO, here app logging just works and the output stays terse.
+Application code can simply use `logging.info()` through `logging.exception()`, or ordinary `logging.getLogger("myapp")` loggers, without setting up logging itself. Set any logger's level when part of the application should be quieter or more verbose, for example `log_config={"loggers": {"myapp": {"level": "DEBUG"}}}`, accepting additions and overrides using [Python's logging configuration schema](https://docs.python.org/3/library/logging.config.html#logging-config-dictschema).
 
 ### Environment (fastapi_vue.env)
 

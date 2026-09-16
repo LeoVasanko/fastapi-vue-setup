@@ -49,3 +49,4 @@ ignore = ["CPY", "D203", "D213", "COM812", "PLR2004"]
 "template/**" = ["F821"]  # Undefined names are template placeholders
 "template/scripts/devserver.py" = ["N806"]  # MODULE_NAME is a template variable
 "fastapi_vue_setup.py" = ["PLR", "C901", "T201", "RUF001"]
+"**/tests/**" = ["S101"]  # Asserts are the point of tests
