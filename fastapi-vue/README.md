@@ -83,18 +83,49 @@ Pretty logging is configured automatically across the host process and all worke
 
 Application code can simply use `logging.info()` through `logging.exception()`, or ordinary `logging.getLogger("myapp")` loggers, without setting up logging itself. Set any logger's level when part of the application should be quieter or more verbose, for example `log_config={"loggers": {"myapp": {"level": "DEBUG"}}}`, accepting additions and overrides using [Python's logging configuration schema](https://docs.python.org/3/library/logging.config.html#logging-config-dictschema).
 
-### Environment
+## Environment
 
-We use environment variables to pass values between program components, from devserver script setting dev mode and telling backend and frontend URLs, to your CLI, which in turn runs the FastAPI app that may also need access to this information. The variables are prefixed by the current application name to avoid conflicts. The CLI entry point should set one like `os.environ["FASTAPI_VUE"] = "MY_APP"`, before using `server.run`
+Environment variables are used to pass values across process boundaries, where ordinary Python variables cannot be shared. We provide runtime passing mainly intended for dev environment passing into the main application CLI, as well as config passing intended for the CLI to pass things to FastAPI side.
+
+Set the application prefix before `server.run()`, at top of your CLI main:
+
+```python
+os.environ["FASTAPI_VUE"] = "MY_APP"
+```
+
+### Runtime environment
 
 ```python
 from fastapi_vue import env
+
+env.prefix       # application prefix
+env.dev          # development mode (bool)
+env.vite_url     # frontend URL (dev)
+env.backend_url  # backend URL (dev)
 ```
 
-The following properties read the environment and return `None` when variables haven't been set:
+The three prefixed variables are set by devserver script and can be read anywhere in your application. Unset values return `None`.
 
-- `env.prefix` — the prefix itself
-- `env.dev` — running in development mode, from e.g. `MY_APP_DEV=1`
-- `env.vite_url`, `fastapi_vue.env.backend_url` — URLs set by the devserver
+### Teleportation
 
-Separately, you may set `FORWARDED_ALLOW_IPS` to specify which connecting IP addresses are trusted to provide `X-Forwarded-*` headers. This is a server setup option rather than an application setting: the devserver does not set it, and it does not use the application-name prefix. It may therefore be set globally for the whole server. The default `127.0.0.1,::1` works for typical setups where Caddy, Nginx or another frontend server runs on the same machine.
+Mainly intended for passing application config from CLI main to all FastAPI workers and through reloader. Put shared configuration in its own module so that any part of your application can import the same `config` variable:
+
+```python
+from dataclasses import dataclass
+from fastapi_vue import env
+
+@dataclass
+class Config:
+    project: str = "."
+    read_only: bool = False
+
+config = env(Config)
+```
+
+The config values should be set (in CLI main) before teleportation, which occurs in `server.run()` for all registered env objects. Then everyone who imports the object receives those values. Modifications after that point however do not transit to other workers.
+
+Initially the passed in dataclass or msgspec.Struct is constructed with default values to its fields. Any number of env definitions may be added for different things, each getting a prefixed env variable by type name like `MY_APP_CONFIG` above. Beside `server.run`, pass objects to your own processes with `fastapi_vue.teleport()` if needed e.g. from FastAPI app to its workers. The data format in these variables is a JSON object.
+
+### Proxy configuration
+
+You may set `FORWARDED_ALLOW_IPS` to specify which connecting IP addresses are trusted to provide `X-Forwarded-*` headers. This is a server setup option rather than an application setting: the devserver does not set it, and it does not use the application-name prefix. It may therefore be set globally for the whole server. The default `127.0.0.1,::1` works for typical setups where Caddy, Nginx or another frontend server runs on the same machine.

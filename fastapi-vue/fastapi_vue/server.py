@@ -15,7 +15,7 @@ from uvicorn import Config, Server
 from uvicorn.main import STARTUP_FAILURE
 from uvicorn.supervisors import ChangeReload, Multiprocess
 
-from .environ import env
+from .environ import env, teleport
 from .hostutil import parse_endpoints
 from .logging import (
     install_access_log,
@@ -147,6 +147,8 @@ def run(  # noqa: PLR0913
     if not endpoints:
         msg = "No endpoints to serve; check listen configuration"
         raise ValueError(msg)
+
+    teleport()  # Serialize bound objects before spawning workers
 
     if startup_box:
         print_startup_box(startup_box, app, endpoints)

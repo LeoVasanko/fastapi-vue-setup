@@ -23,3 +23,8 @@ build-backend = "hatchling.build"
 [tool.hatch.version]
 source = "vcs"
 raw-options.root = ".."
+
+[dependency-groups]
+dev = [
+    "msgspec>=0.21.1",
+]
