@@ -77,21 +77,24 @@ A startup box with the app name, version and connect URL is printed before servi
 
 Other arguments are generally passed to `uvicorn.run`, although some like `log_config` receive our modifications.
 
-> As a deployment option, environment `FORWARDED_ALLOW_IPS` controls `X-Forwarded` trusted IPs (default: `127.0.0.1,::1` works for typical setups).
-
-
 ### Logging and exceptions
 
 Pretty logging is configured automatically across the host process and all workers, at INFO in development and WARNING in production, with emoji level prefixes, colored access logs, and tracebacks rendered by [tracerite](https://pypi.org/project/tracerite/). With `FastAPI(debug=True)`, **Internal Server Error** responses use tracerite formatting as well.
 
 Application code can simply use `logging.info()` through `logging.exception()`, or ordinary `logging.getLogger("myapp")` loggers, without setting up logging itself. Set any logger's level when part of the application should be quieter or more verbose, for example `log_config={"loggers": {"myapp": {"level": "DEBUG"}}}`, accepting additions and overrides using [Python's logging configuration schema](https://docs.python.org/3/library/logging.config.html#logging-config-dictschema).
 
-### Environment (fastapi_vue.env)
+### Environment
 
 We use environment variables to pass values between program components, from devserver script setting dev mode and telling backend and frontend URLs, to your CLI, which in turn runs the FastAPI app that may also need access to this information. The variables are prefixed by the current application name to avoid conflicts. The CLI entry point should set one like `os.environ["FASTAPI_VUE"] = "MY_APP"`, before using `server.run`
 
+```python
+from fastapi_vue import env
+```
+
 The following properties read the environment and return `None` when variables haven't been set:
 
-- `fastapi_vue.env.prefix` — the prefix itself
-- `fastapi_vue.env.dev` — running in development mode, from e.g. `MY_APP_DEV=1`
-- `fastapi_vue.env.vite_url`, `fastapi_vue.env.backend_url` — URLs set by the devserver
+- `env.prefix` — the prefix itself
+- `env.dev` — running in development mode, from e.g. `MY_APP_DEV=1`
+- `env.vite_url`, `fastapi_vue.env.backend_url` — URLs set by the devserver
+
+Separately, you may set `FORWARDED_ALLOW_IPS` to specify which connecting IP addresses are trusted to provide `X-Forwarded-*` headers. This is a server setup option rather than an application setting: the devserver does not set it, and it does not use the application-name prefix. It may therefore be set globally for the whole server. The default `127.0.0.1,::1` works for typical setups where Caddy, Nginx or another frontend server runs on the same machine.
