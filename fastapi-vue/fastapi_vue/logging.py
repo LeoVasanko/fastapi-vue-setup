@@ -35,6 +35,8 @@ from .environ import env
 
 ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
 
+RESET = "\033[0m"
+
 ACCESS_LOG_FMT = "%(client)s %(status)s %(method)s %(host)s%(path)s %(extra)s%(timing)s"
 
 ACCESS_LOGGER = "fastapi_vue.access"
@@ -122,7 +124,14 @@ class Formatter(logging.Formatter):
             return _level_prefix(record) + record.getMessage()
         formatted = super().formatMessage(record)
         if not self.use_colors:
-            formatted = strip_ansi(formatted)
+            return strip_ansi(formatted)
+        # Guard against app-supplied fields (``extra``) carrying raw color
+        # codes without a reset: ensure the line begins and ends with a
+        # reset, but only add one where it's missing to avoid duplicates.
+        if not formatted.startswith(RESET):
+            formatted = RESET + formatted
+        if not formatted.endswith(RESET):
+            formatted += RESET
         return formatted
 
 
