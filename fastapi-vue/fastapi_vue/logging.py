@@ -98,14 +98,16 @@ class Formatter(logging.Formatter):
         use_colors: bool | None = None,  # noqa: FBT001  # mirrors logging.Formatter
         *,
         access: bool = False,
+        install: bool = True,
     ) -> None:
-        """Load tracerite, optionally install the access log, detect color support."""
+        """Load tracerite, optionally install server patches and access log."""
         tracerite.load()
         tracerite.load_suppressions(
             extra={"starlette.routing": "until", "fastapi.routing": "until"}
         )
-        patch_lifespan_logging()
-        patch_server_error_middleware()
+        if install:
+            patch_lifespan_logging()
+            patch_server_error_middleware()
         if access:
             install_access_log()
         if use_colors in (True, False):
@@ -309,7 +311,35 @@ def _merge_log_config(base: dict, overlay: dict) -> dict:
     return base
 
 
-def patch_log_config(log_config, *, access_log: bool = True):  # noqa: ANN001, ANN201
+def setup_logging(*, log_config: dict | None = None, dev: bool | None = None) -> None:
+    """Set up pretty logging standalone, outside of ``server.run()``.
+
+    Optional helper for CLI mains, devservers and scripts that log before
+    (or without) starting the server.  Loads tracerite directly and applies
+    the same patching as the server path (see ``patch_log_config``, a
+    private helper) with ``logging.config.dictConfig``: partial dicts merge
+    over uvicorn's default config, so only customizations are needed.  The
+    server-side patches (error middleware, access log) are not installed —
+    there is no server here.  The root logger level is INFO with *dev*
+    true, WARNING otherwise; *dev* of None follows ``env.dev``.  An
+    explicit level in *log_config* always wins::
+
+        import fastapi_vue
+        fastapi_vue.setup_logging(log_config={"loggers": {"myapp": {"level": "DEBUG"}}})
+    """
+    if log_config is not None and not isinstance(log_config, dict):
+        msg = f"setup_logging requires a dict log_config, got {type(log_config).__name__}"
+        raise TypeError(msg)
+    import logging.config
+
+    tracerite.load()
+    config = patch_log_config(log_config or {}, access_log=False, install=False, dev=dev)
+    # Standalone setup must not disable loggers created before this call.
+    config.setdefault("disable_existing_loggers", False)
+    logging.config.dictConfig(config)
+
+
+def patch_log_config(log_config, *, access_log: bool = True, install: bool = True, dev: bool | None = None):  # noqa: ANN001, ANN201
     """Patch a uvicorn log_config dict for our logging, best-effort.
 
     A dict without a ``version`` key is treated as a partial config: it is
@@ -330,9 +360,11 @@ def patch_log_config(log_config, *, access_log: bool = True):  # noqa: ANN001, A
     ``watchfiles.main`` logger is lifted to WARNING so its INFO "N changes
     detected" line is dropped while the WARNING "Reloading..." line (logged
     to ``uvicorn.error``) still shows; a user-supplied level wins.
-    With ``access_log``, additionally rewires the ``access`` formatter to
-    our Formatter and attaches its handler to our ``fastapi_vue.access``
-    logger.  We must not
+    With ``install=False`` (standalone use via ``setup_logging``) the
+    NullHandler backdoor and the server-side patches in Formatter are
+    skipped.  With ``access_log``, additionally rewires the ``access``
+    formatter to our Formatter and attaches its handler to our
+    ``fastapi_vue.access`` logger.  We must not
     attach handlers to ``uvicorn.access``: uvicorn gates its own
     protocol-level access logging on ``uvicorn.access.hasHandlers()``.
     """
@@ -342,12 +374,13 @@ def patch_log_config(log_config, *, access_log: bool = True):  # noqa: ANN001, A
     if "version" not in config:
         config = _merge_log_config(deepcopy(LOGGING_CONFIG), config)
 
-    with suppress(Exception):
-        config["formatters"]["fastapi_vue"] = {"()": "fastapi_vue.logging.Formatter"}
-        config["handlers"]["fastapi_vue"] = {
-            "class": "logging.NullHandler",
-            "formatter": "fastapi_vue",
-        }
+    if install:
+        with suppress(Exception):
+            config["formatters"]["fastapi_vue"] = {"()": "fastapi_vue.logging.Formatter"}
+            config["handlers"]["fastapi_vue"] = {
+                "class": "logging.NullHandler",
+                "formatter": "fastapi_vue",
+            }
 
     with suppress(Exception):
         filters = config.setdefault("filters", {})
@@ -367,6 +400,7 @@ def patch_log_config(log_config, *, access_log: bool = True):  # noqa: ANN001, A
                 "()": "fastapi_vue.logging.Formatter",
                 "fmt": "%(message)s",
                 "use_colors": None,
+                "install": install,
             }
 
     # uvicorn's default config leaves the root logger handlerless, eating
@@ -375,7 +409,7 @@ def patch_log_config(log_config, *, access_log: bool = True):  # noqa: ANN001, A
     # with Python's default; dev keeps INFO.  Subloggers can override.
     with suppress(Exception):
         root = config.setdefault("root", {})
-        root.setdefault("level", "INFO" if env.dev else "WARNING")
+        root.setdefault("level", "INFO" if (env.dev if dev is None else dev) else "WARNING")
         if "default" in config.get("handlers", {}):
             root_handlers = root.setdefault("handlers", [])
             if "default" not in root_handlers:
