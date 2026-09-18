@@ -10,21 +10,31 @@ from pathlib import Path
 
 MIN_NODE_VERSION = 20
 
+# Duplicated from fastapi_vue.logging because build environment is isolated
+_LEVEL_EMOJI = {
+    logging.DEBUG: "🐛",
+    logging.INFO: "🔷",
+    logging.WARNING: "❗",
+    logging.ERROR: "🛑",
+    logging.CRITICAL: "🚨",
+}
 
-class _PrefixFormatter(logging.Formatter):
-    """Formatter that adds prefix based on log level."""
+
+class _Formatter(logging.Formatter):
+    """Emoji level prefix formatter, mirroring fastapi_vue.logging.Formatter."""
 
     def format(self, record: logging.LogRecord) -> str:
-        if record.levelno >= logging.WARNING:
-            return f"⚠️  {record.getMessage()}"
-        return record.getMessage()
+        emoji = _LEVEL_EMOJI.get(record.levelno)
+        prefix = f"{emoji} " if emoji else f"{record.levelname}: "
+        return prefix + record.getMessage()
 
 
 _handler = logging.StreamHandler()
-_handler.setFormatter(_PrefixFormatter())
+_handler.setFormatter(_Formatter())
 logger = logging.getLogger("fastapi-vue")
 logger.addHandler(_handler)
 logger.setLevel(logging.INFO)
+logger.propagate = False  # own handler; do not double-print via a configured root
 
 
 def _check_node_version(node_path: str) -> None:
