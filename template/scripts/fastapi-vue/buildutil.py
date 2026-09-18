@@ -10,23 +10,19 @@ from pathlib import Path
 
 MIN_NODE_VERSION = 20
 
-# Duplicated from fastapi_vue.logging because build environment is isolated
-_LEVEL_EMOJI = {
-    logging.DEBUG: "🐛",
-    logging.INFO: "🔷",
-    logging.WARNING: "❗",
-    logging.ERROR: "🛑",
-    logging.CRITICAL: "🚨",
-}
-
-
 class _Formatter(logging.Formatter):
-    """Emoji level prefix formatter, mirroring fastapi_vue.logging.Formatter."""
+    """Prefix formatter, intentionally different from fastapi_vue.logging.
+
+    INFO and below pass through unprefixed so messages can use their own
+    markings (>>>, ###); WARNING and above get an emoji prefix.
+    """
 
     def format(self, record: logging.LogRecord) -> str:
-        emoji = _LEVEL_EMOJI.get(record.levelno)
-        prefix = f"{emoji} " if emoji else f"{record.levelname}: "
-        return prefix + record.getMessage()
+        if record.levelno >= logging.ERROR:
+            return f"🛑 {record.getMessage()}"
+        if record.levelno >= logging.WARNING:
+            return f"💣 {record.getMessage()}"
+        return record.getMessage()
 
 
 _handler = logging.StreamHandler()

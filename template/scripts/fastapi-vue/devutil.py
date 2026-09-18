@@ -133,7 +133,7 @@ async def ready(url: str, path: str = "", max_attempts: int = 50) -> None:
 
     for attempt in range(max_attempts):
         if await http_get_server(f"{url}{path}", timeout=1.0) is not None:
-            logger.info("✓ Backend ready!")
+            logger.info("🟢 Backend ready!")
             return
         if attempt == max_attempts - 1:
             logger.error("Backend at %s didn't start in time", url)
