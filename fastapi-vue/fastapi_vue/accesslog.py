@@ -9,7 +9,7 @@ import time
 from ipaddress import IPv6Address
 from typing import TYPE_CHECKING, cast
 
-from .termwidth import pad_display
+from .tty import pad_display, use_color
 
 if TYPE_CHECKING:
     from uvicorn._types import (
@@ -388,6 +388,7 @@ class AccessLogMiddleware:
             if message["type"] == "websocket.accept" and not accepted:
                 accepted = True
                 ws_id = _next_ws_id()
+                www_scope["state"]["logid"] = f"{_WS_OPEN}{ws_id}{_RESET}" if use_color() else ws_id
                 fields = _ws_open_extra(www_scope, ws_id, origin, _extra())
                 logger.info(_assemble_access_log(fields), extra=fields)
             elif message["type"] == "websocket.http.response.start" and not closed:

@@ -2,14 +2,14 @@
 
 import sys
 
-from .termwidth import display_width, pad_display
+from .tty import display_width, pad_display
 
 
 def print_box(text: str) -> None:
     """Print text in a rounded unicode box sized to its longest line.
 
     The text is split on newlines as-is (not trimmed). Padding accounts
-    for ANSI colors and unicode display width (see termwidth.display_width).
+    for ANSI colors and unicode display width (see tty.display_width).
     """
     lines = text.split("\n")
     width = max(map(display_width, lines))

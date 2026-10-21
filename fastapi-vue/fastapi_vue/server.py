@@ -22,9 +22,9 @@ from .logging import (
     patch_lifespan_logging,
     patch_log_config,
     patch_server_error_middleware,
-    use_color,
 )
 from .startupbox import print_box
+from .tty import use_color
 
 tracerite.load()  # Early load on CLI load (import server); uvicorn workers reload via log config
 

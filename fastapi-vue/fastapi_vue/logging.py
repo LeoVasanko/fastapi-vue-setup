@@ -10,8 +10,6 @@ from __future__ import annotations
 
 import io
 import logging
-import os
-import re
 import sys
 from contextlib import suppress
 from copy import deepcopy
@@ -32,34 +30,13 @@ if TYPE_CHECKING:
 
 from .accesslog import AccessLogMiddleware
 from .environ import env
-
-ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
+from .tty import strip_ansi, use_color
 
 RESET = "\033[0m"
 
 ACCESS_LOG_FMT = "%(client)s %(status)s %(method)s %(host)s%(path)s %(extra)s%(timing)s"
 
 ACCESS_LOGGER = "fastapi_vue.access"
-
-
-def strip_ansi(text: str) -> str:
-    """Remove ANSI escape codes from text."""
-    return ANSI_ESCAPE_RE.sub("", text)
-
-
-def use_color(stream: io.TextIOBase = sys.stderr) -> bool:
-    """Test if the stream supports color codes."""
-    if os.environ.get("NO_COLOR"):  # Non empty means no (no-color.org)
-        return False
-    if os.environ.get("FORCE_COLOR", "") not in {"", "0"}:  # force-color.org, node
-        return True
-    if hasattr(stream, "isatty") and stream.isatty():
-        return True
-    with suppress(KeyError, ValueError, OSError):  # Journald does color (-ocat)
-        dev, ino = map(int, os.environ["JOURNAL_STREAM"].split(":", 1))
-        st = os.fstat(stream.fileno())
-        return st.st_dev == dev and st.st_ino == ino
-    return False
 
 
 _LEVEL_EMOJI = {
