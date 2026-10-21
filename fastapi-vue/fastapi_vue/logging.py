@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import io
 import logging
-import sys
 from contextlib import suppress
 from copy import deepcopy
 from typing import TYPE_CHECKING, Literal
@@ -92,7 +91,7 @@ class Formatter(logging.Formatter):
         if use_colors in (True, False):
             self.use_colors = use_colors
         else:
-            self.use_colors = use_color(sys.stdout)
+            self.use_colors = use_color()
         super().__init__(fmt=fmt, datefmt=datefmt, style=style)
 
     def formatMessage(self, record: logging.LogRecord) -> str:  # noqa: N802
