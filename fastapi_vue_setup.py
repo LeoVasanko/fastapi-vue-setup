@@ -1494,6 +1494,9 @@ def ensure_frontend(
         print(f"🎨 Would run: {' '.join(create_cmd)}")
         return True
 
+    # Remember pre-existing content so a failed create-vue can be cleaned up
+    pre_existing = set(frontend_dir.iterdir()) if frontend_dir.exists() else set()
+
     print("🎨 No frontend/ found, creating Vue project...")
     print(f">>> {' '.join(create_cmd)}")
     if not vue_args:
@@ -1502,12 +1505,26 @@ def ensure_frontend(
     try:
         result = subprocess.run(create_cmd, cwd=project_dir, check=False)  # noqa: S603
     except KeyboardInterrupt:
-        print("\n❌ create-vue interrupted")
-        return False
+        result = None
     # create-vue exits 0 when its prompts are cancelled, so a zero return
     # code alone doesn't mean a project was created.
-    if result.returncode != 0 or not package_json.exists():
-        print("❌ create-vue failed or was cancelled")
+    if result is None or result.returncode != 0 or not package_json.exists():
+        reason = "interrupted" if result is None else "failed or was cancelled"
+        print(f"❌ create-vue {reason}")
+        leftovers = (
+            set(frontend_dir.iterdir()) - pre_existing if frontend_dir.exists() else set()
+        )
+        if leftovers:
+            if pre_existing:
+                for path in leftovers:
+                    if path.is_dir():
+                        shutil.rmtree(path, ignore_errors=True)
+                    else:
+                        path.unlink(missing_ok=True)
+                print("🧹 Removed partial files created by create-vue")
+            else:
+                shutil.rmtree(frontend_dir, ignore_errors=True)
+                print("🧹 Removed partial frontend/")
         return False
 
     return True
@@ -1537,17 +1554,22 @@ def cmd_setup(args: argparse.Namespace) -> int:
         print("🏃 DRY RUN MODE - no changes will be made\n")
 
     # Create project directory if it doesn't exist
+    created_project_dir = False
     if not project_dir.exists():
         if dry:
             print(f"✅ Would create directory: {project_dir}")
         else:
             project_dir.mkdir(parents=True)
+            created_project_dir = True
             print(f"✅ Created {project_dir}")
 
     print(f"🔧 Setting up project: {project_dir}")
 
     # Step 1: Ensure frontend exists (do this first so cancellation doesn't leave partial setup)
     if not ensure_frontend(project_dir, vue_args=args.vue_args, dry=dry):
+        if created_project_dir:
+            shutil.rmtree(project_dir, ignore_errors=True)
+            print(f"🧹 Removed {project_dir}")
         return 1
 
     # Step 2: Ensure Python project exists
