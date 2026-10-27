@@ -1305,38 +1305,130 @@ def merge_pyproject(
 # =============================================================================
 
 
+MIN_NODE_VERSION = 20
+
+
+def _check_node_version(node_path: str) -> None:
+    """Check if Node.js version is >= 20.
+
+    Raises RuntimeError if version is too old or cannot be determined.
+    """
+    try:
+        result = subprocess.run(  # noqa: S603
+            [node_path, "--version"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        version_str = result.stdout.strip()
+        # Parse version like "v20.10.0" or "v18.17.1"
+        match = re.match(r"v(\d+)", version_str)
+        if match:
+            major_version = int(match.group(1))
+            if major_version >= MIN_NODE_VERSION:
+                return
+            msg = f"Node.js {version_str} found, but v{MIN_NODE_VERSION}+ required"
+            raise RuntimeError(msg)
+    except (subprocess.CalledProcessError, FileNotFoundError, ValueError):
+        pass
+    msg = "Could not determine Node.js version"
+    raise RuntimeError(msg)
+
+
+def _validate_npm_runtime(tool: str) -> bool:
+    """Validate npm runtime by checking Node.js version. Returns True if valid."""
+    node_path = shutil.which("node", path=str(Path(tool).parent))
+    if node_path is None:
+        return False
+    try:
+        _check_node_version(node_path)
+    except RuntimeError:
+        return False
+    return True
+
+
+def _find_runtime_from_env(options: list[str]) -> tuple[str, str] | None:
+    """Find runtime specified by JS_RUNTIME environment variable."""
+    js_runtime_env = os.environ.get("JS_RUNTIME")
+    if not js_runtime_env:
+        return None
+
+    js_runtime = js_runtime_env
+    js_path = Path(js_runtime)
+    runtime_name = js_path.name
+
+    # Map node to npm
+    if runtime_name == "node":
+        runtime_name = "npm"
+        js_runtime = str(js_path.parent / "npm") if js_path.parent.name else "npm"
+
+    for option in options:
+        if option != runtime_name and not runtime_name.startswith(option):
+            continue
+
+        tool = shutil.which(js_runtime)
+        if tool is None:
+            print(f"⚠️  JS_RUNTIME={js_runtime_env}: {option} not found")
+            return None
+
+        if option == "npm":
+            node_path = shutil.which("node", path=str(Path(tool).parent))
+            if node_path is None:
+                print(f"⚠️  JS_RUNTIME={js_runtime_env}: node not found")
+                return None
+            try:
+                _check_node_version(node_path)
+            except RuntimeError as e:
+                print(f"⚠️  JS_RUNTIME={js_runtime_env}: {e}")
+                return None
+
+        return tool, option
+
+    print(f"⚠️  JS_RUNTIME={js_runtime_env} not recognized")
+    return None
+
+
+def _auto_detect_runtime(options: list[str]) -> tuple[str, str] | None:
+    """Auto-detect JavaScript runtime from available options."""
+    node_version_error: RuntimeError | None = None
+
+    for option in options:
+        tool = shutil.which(option)
+        if not tool:
+            continue
+
+        if option == "npm" and not _validate_npm_runtime(tool):
+            try:
+                node_path = shutil.which("node", path=str(Path(tool).parent))
+                if node_path:
+                    _check_node_version(node_path)
+            except RuntimeError as e:
+                node_version_error = e
+            continue
+
+        return tool, option
+
+    if node_version_error:
+        print(f"⚠️  {node_version_error}")
+    return None
+
+
 def find_js_runtime() -> tuple[str, str] | None:
     """Find a JavaScript runtime from JS_RUNTIME env or auto-detect.
 
-    Returns (tool_path, tool_name) where tool_name is "deno", "npm", or "bun".
+    Returns (tool_path, tool_name) where tool_name is "npm", "deno", or "bun".
     Returns None if no runtime is found.
     """
-    options = ["deno", "npm", "bun"]
+    options = ["npm", "deno", "bun"]
 
     # Check for JS_RUNTIME environment variable
-    if js_runtime_env := os.environ.get("JS_RUNTIME"):
-        js_runtime = js_runtime_env
-        js_path = Path(js_runtime)
-        runtime_name = js_path.name
-        # Map node to npm
-        if runtime_name == "node":
-            runtime_name = "npm"
-            js_runtime = str(js_path.parent / "npm") if js_path.parent.name else "npm"
-        for option in options:
-            if option == runtime_name or runtime_name.startswith(option):
-                tool = shutil.which(js_runtime)
-                if tool is None:
-                    print(f"⚠️  JS_RUNTIME={js_runtime_env} not found")
-                    return None
-                return tool, option
-        print(f"⚠️  JS_RUNTIME={js_runtime_env} not recognized")
+    if result := _find_runtime_from_env(options):
+        return result
+    if os.environ.get("JS_RUNTIME"):
         return None
 
     # Auto-detect
-    for option in options:
-        if tool := shutil.which(option):
-            return tool, option
-    return None
+    return _auto_detect_runtime(options)
 
 
 def ensure_python_project(project_dir: Path, *, dry: bool = False) -> bool:
@@ -1382,7 +1474,7 @@ def ensure_frontend(
     # Find JS runtime
     runtime = find_js_runtime()
     if runtime is None:
-        print("❌ No JavaScript runtime found (need deno, npm, or bun)")
+        print("❌ No JavaScript runtime found (need Node.js v20+/npm, deno, or bun)")
         return False
     js_tool, js_name = runtime
 
