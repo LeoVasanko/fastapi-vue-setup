@@ -30,7 +30,7 @@ export default function fastapiVue({ paths = ['/api'] } = {}) {
       clearScreen: false,
       server: { proxy },
       build: {
-        outDir: '../MODULE_NAME/frontend-build',
+        outDir: '../MODULE_DIR/frontend-build',
         emptyOutDir: true,
       },
     }),

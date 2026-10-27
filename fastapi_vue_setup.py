@@ -138,18 +138,23 @@ DEFAULT_HEALTH = "/api/health?from=devserver.py"
 UPGRADE_MARKER = "auto-upgrade@fastapi-vue-setup"
 
 # pyproject.toml additions for patched projects
+# packages/only-include use the package path relative to the project root
+# (MODULE_NAME placeholder), so both flat and nested layouts work; the wheel
+# target strips the leading directories, mapping e.g. backend/my_app -> my_app
 PYPROJECT_ADDITIONS = {
     "tool": {
         "hatch": {
             "build": {
-                "packages": ["MODULE_NAME"],
                 "artifacts": ["MODULE_NAME/frontend-build"],
                 "targets": {
+                    "wheel": {
+                        "packages": ["MODULE_NAME"],
+                    },
                     "sdist": {
+                        "only-include": ["MODULE_NAME", "scripts/fastapi-vue"],
                         "hooks": {"custom": {"path": "scripts/fastapi-vue/buildhook.py"}},
-                    }
+                    },
                 },
-                "only-packages": True,
             }
         }
     },
@@ -366,6 +371,19 @@ def find_module_name(project_dir: Path) -> str | None:
         return name.replace("-", "_")
 
     return None
+
+
+def find_module_dir(project_dir: Path, module_name: str) -> Path:
+    """Locate the Python package directory.
+
+    Supports flat (<module>), src/<module>, and backend/<module> layouts.
+    For new projects (no package yet), defaults to the backend/ layout.
+    """
+    for sub in (module_name, f"src/{module_name}", f"backend/{module_name}"):
+        candidate = project_dir / sub
+        if candidate.is_dir():
+            return candidate
+    return project_dir / "backend" / module_name
 
 
 def find_fastapi_app(module_dir: Path, project_dir: Path | None = None) -> tuple[Path, str] | None:
@@ -1180,12 +1198,25 @@ def _write_fallback_file(
 
 
 def merge_pyproject(
-    data: tomlkit.TOMLDocument, additions: dict, module_name: str
+    data: tomlkit.TOMLDocument, additions: dict, module_rel: str
 ) -> tomlkit.TOMLDocument:
-    """Merge additions into pyproject.toml data, preserving comments and existing values."""
+    """Merge additions into pyproject.toml data, preserving comments and existing values.
+
+    module_rel is the package path relative to the project root (e.g. "backend/my_app").
+    """
     # Ensure hatchling build system is configured
     if "build-system" not in data:
         data["build-system"] = tomlkit.table()
+
+    # Replace uv_build with hatchling: the frontend build hook and artifacts
+    # handling require hatch, which uv_build does not support
+    if data["build-system"].get("build-backend") == "uv_build":
+        data["build-system"]["requires"] = ["hatchling"]
+        data["build-system"]["build-backend"] = "hatchling.build"
+        uv_tool = data.get("tool", {}).get("uv", {}) if "tool" in data else {}
+        if "build-backend" in uv_tool:
+            del data["tool"]["uv"]["build-backend"]
+        print("ℹ️  Replaced uv_build with hatchling (required for the frontend build hook)")
 
     # Add hatchling to requires if not present, preserving existing requires
     if "requires" not in data["build-system"]:
@@ -1226,38 +1257,45 @@ def merge_pyproject(
     hatch_build = data["tool"]["hatch"]["build"]
     hatch_additions = additions["tool"]["hatch"]["build"]
 
-    # Set packages if not already set
-    if "packages" not in hatch_build:
-        hatch_build["packages"] = [
-            p.replace("MODULE_NAME", module_name) for p in hatch_additions["packages"]
-        ]
-
     # Set artifacts if not already set
     if "artifacts" not in hatch_build:
         hatch_build["artifacts"] = [
-            a.replace("MODULE_NAME", module_name) for a in hatch_additions["artifacts"]
+            a.replace("MODULE_NAME", module_rel) for a in hatch_additions["artifacts"]
         ]
 
-    # Set only-packages if not already set
-    if "only-packages" not in hatch_build:
-        hatch_build["only-packages"] = hatch_additions["only-packages"]
-
-    # Add sdist target with custom hook
+    # Add wheel/sdist targets
     if "targets" not in hatch_build:
         hatch_build["targets"] = tomlkit.table()
-    if "sdist" not in hatch_build["targets"]:
-        hatch_build["targets"]["sdist"] = tomlkit.table()
-    if "hooks" not in hatch_build["targets"]["sdist"]:
-        hatch_build["targets"]["sdist"]["hooks"] = tomlkit.table()
-    if "custom" not in hatch_build["targets"]["sdist"]["hooks"]:
-        hatch_build["targets"]["sdist"]["hooks"]["custom"] = tomlkit.table()
-    if "path" not in hatch_build["targets"]["sdist"]["hooks"]["custom"]:
-        hatch_build["targets"]["sdist"]["hooks"]["custom"]["path"] = hatch_additions["targets"][
-            "sdist"
-        ]["hooks"]["custom"]["path"]
-    elif hatch_build["targets"]["sdist"]["hooks"]["custom"]["path"] == OLD_BUILD_HOOK_PATH:
+    targets = hatch_build["targets"]
+    target_additions = hatch_additions["targets"]
+
+    # Wheel: set packages if neither the wheel target nor the top-level
+    # hatch build config (older setups) defines them
+    if "wheel" not in targets:
+        targets["wheel"] = tomlkit.table()
+    if "packages" not in targets["wheel"] and "packages" not in hatch_build:
+        targets["wheel"]["packages"] = [
+            p.replace("MODULE_NAME", module_rel) for p in target_additions["wheel"]["packages"]
+        ]
+
+    # Sdist: only-include (keeps the package directory prefix so wheels built
+    # from the sdist find the same layout) plus the frontend build hook
+    if "sdist" not in targets:
+        targets["sdist"] = tomlkit.table()
+    sdist = targets["sdist"]
+    if "only-include" not in sdist:
+        sdist["only-include"] = [
+            p.replace("MODULE_NAME", module_rel) for p in target_additions["sdist"]["only-include"]
+        ]
+    if "hooks" not in sdist:
+        sdist["hooks"] = tomlkit.table()
+    if "custom" not in sdist["hooks"]:
+        sdist["hooks"]["custom"] = tomlkit.table()
+    if "path" not in sdist["hooks"]["custom"]:
+        sdist["hooks"]["custom"]["path"] = target_additions["sdist"]["hooks"]["custom"]["path"]
+    elif sdist["hooks"]["custom"]["path"] == OLD_BUILD_HOOK_PATH:
         # Migrate old build hook path to new name
-        hatch_build["targets"]["sdist"]["hooks"]["custom"]["path"] = NEW_BUILD_HOOK_PATH
+        sdist["hooks"]["custom"]["path"] = NEW_BUILD_HOOK_PATH
 
     return data
 
@@ -1308,17 +1346,20 @@ def ensure_python_project(project_dir: Path, *, dry: bool = False) -> bool:
         return True
 
     if dry:
-        print(f"📦 Would run: uv init {project_dir}")
+        print(f"📦 Would run: uv init --bare --build-backend hatchling {project_dir}")
         return True
 
     print("📦 No pyproject.toml found, initializing Python project...")
-    print(">>> uv init")
-    result = subprocess.run(["uv", "init", str(project_dir)], check=False)  # noqa: S603, S607
+    print(">>> uv init --bare --build-backend hatchling")
+    result = subprocess.run(  # noqa: S603
+        ["uv", "init", "--bare", "--vcs", "git", "--build-backend", "hatchling", str(project_dir)],  # noqa: S607
+        check=False,
+    )
     if result.returncode != 0:
         print("❌ uv init failed")
         return False
 
-    # Remove files created by uv init that we don't need
+    # Remove boilerplate files created by older uv init versions
     for filename in ["hello.py", "main.py", ".python-version"]:
         filepath = project_dir / filename
         if filepath.exists():
@@ -1412,6 +1453,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         return 1
 
     # Step 2: Ensure Python project exists
+    fresh_project = not (project_dir / "pyproject.toml").exists()
     if not ensure_python_project(project_dir, dry=dry):
         return 1
 
@@ -1424,7 +1466,10 @@ def cmd_setup(args: argparse.Namespace) -> int:
     else:
         print(f"📦 Module: {module_name}")
 
-    module_dir = project_dir / module_name
+    module_dir = find_module_dir(project_dir, module_name)
+    module_rel = module_dir.relative_to(project_dir).as_posix()
+    if module_rel != module_name:
+        print(f"📂 Package layout: {module_rel}/")
     scripts_dir = project_dir / "scripts"
     fastapi_vue_scripts = scripts_dir / "fastapi-vue"
 
@@ -1436,8 +1481,9 @@ def cmd_setup(args: argparse.Namespace) -> int:
     if existing_cli_module:
         print(f"ℹ️  Using existing CLI: {existing_cli_module}")
 
-    # Resolve the CLI main module to a file path
-    main = project_dir / Path(*main_module_path.split(".")).with_suffix(".py")
+    # Resolve the CLI main module to a file path (relative to the import root,
+    # i.e. the parent of the package directory)
+    main = module_dir.parent / Path(*main_module_path.split(".")).with_suffix(".py")
 
     # Determine port configuration
     # Priority: --ports argument > existing project values > defaults
@@ -1485,6 +1531,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
     # Template variables
     tpl_vars = {
         "MODULE_NAME": module_name,
+        "MODULE_DIR": module_rel,
         "PROJECT_TITLE": project_title,
         "TEMPLATE_DEFAULT_PORT": str(default_port),
         "TEMPLATE_VITE_PORT": str(vite_port),
@@ -1499,8 +1546,8 @@ def cmd_setup(args: argparse.Namespace) -> int:
         app_file, app_var = app_info
         print(f"📍 Found FastAPI app: {app_var} in {app_file.name}")
         tpl_vars["APP_VAR"] = app_var
-        # Dotted module path relative to project dir (e.g. "{module_name}.api.main")
-        app_module = ".".join(app_file.relative_to(project_dir).with_suffix("").parts)
+        # Dotted module path (e.g. "{module_name}.api.main")
+        app_module = ".".join(app_file.relative_to(module_dir.parent).with_suffix("").parts)
         tpl_vars["APP_MODULE"] = app_module
     else:
         print("📍 No existing FastAPI app found, will create new one")
@@ -1583,12 +1630,15 @@ def cmd_setup(args: argparse.Namespace) -> int:
         )
     else:
         # No app: create full app.py
-        # Create __init__.py if missing
+        # Create __init__.py if missing (overwrite uv init hello-world boilerplate)
         init_file = module_dir / "__init__.py"
-        if not init_file.exists():
+        boilerplate = init_file.exists() and re.search(
+            r'^def main\(\) -> None:\s*\n\s*print\("Hello from', init_file.read_text("UTF-8")
+        )
+        if not init_file.exists() or boilerplate:
             template = load_template("backend/__init__.py")
             content = render_template(template, **tpl_vars)
-            write_file(init_file, content, overwrite=False, dry=dry)
+            write_file(init_file, content, overwrite=False, dry=dry, force=boilerplate)
 
         # Create app.py
         app_file_path = module_dir / "app.py"
@@ -1669,9 +1719,10 @@ def cmd_setup(args: argparse.Namespace) -> int:
         plugin_file = frontend_dir / "vite-plugin-fastapi.js"
         # Upgrade old plugin versions that lack the auto-upgrade marker
         _upgrade_old_vite_plugin(plugin_file, module_name, dry=dry)
-        template = load_template("frontend/vite-plugin-fastapi.js")
-        content = render_template(template, **tpl_vars)
-        write_file(plugin_file, content, overwrite=True, dry=dry)
+        for plugin_template in ("vite-plugin-fastapi.js", "vite-plugin-fastapi.d.ts"):
+            template = load_template(f"frontend/{plugin_template}")
+            content = render_template(template, **tpl_vars)
+            write_file(frontend_dir / plugin_template, content, overwrite=True, dry=dry)
 
         # Find existing vite config (prefer .ts, fall back to .js)
         vite_config_ts = frontend_dir / "vite.config.ts"
@@ -1694,13 +1745,29 @@ def cmd_setup(args: argparse.Namespace) -> int:
         old_content = pyproject_path.read_text("UTF-8")
         data = tomlkit.parse(old_content)
 
-        updated = merge_pyproject(data, PYPROJECT_ADDITIONS, module_name)
+        updated = merge_pyproject(data, PYPROJECT_ADDITIONS, module_rel)
 
-        # Only add script entry if project doesn't already have scripts
-        if "scripts" not in updated["project"] or not updated["project"]["scripts"]:
+        # Ensure a script entry pointing at our __main__:main
+        scripts = updated["project"].get("scripts")
+        main_entry = f"{module_name}.__main__:main"
+        if not scripts:
             updated["project"]["scripts"] = tomlkit.table()
-            script_name = module_name.replace("_", "-")
-            updated["project"]["scripts"][script_name] = f"{module_name}.__main__:main"
+            updated["project"]["scripts"][module_name.replace("_", "-")] = main_entry
+        else:
+            has_our_entry = any(
+                isinstance(entry, str) and entry.startswith(f"{module_name}.")
+                for entry in scripts.values()
+            )
+            if not has_our_entry:
+                # Rewrite uv init boilerplate ("my-app = \"my_app:main\"") if present
+                boilerplate = next(
+                    (name for name, entry in scripts.items() if entry == f"{module_name}:main"),
+                    None,
+                )
+                if boilerplate:
+                    scripts[boilerplate] = main_entry
+                else:
+                    scripts[module_name.replace("_", "-")] = main_entry
 
         # Check if content actually changed
         new_content = tomlkit.dumps(updated)
@@ -1715,8 +1782,16 @@ def cmd_setup(args: argparse.Namespace) -> int:
 
     # === Update .gitignore ===
     gitignore_path = project_dir / ".gitignore"
-    gitignore_entry = f"/{module_name}/frontend-build"
-    if gitignore_path.exists():
+    gitignore_entry = f"/{module_rel}/frontend-build"
+    if fresh_project:
+        # New project: opinionated .gitignore (ignore dotfiles and lockfiles)
+        content = f"{gitignore_entry}\n.*\n!.gitignore\n*.lock\n"
+        if dry:
+            print(f"✅ Would create opinionated .gitignore in {project_dir}")
+        else:
+            gitignore_path.write_text(content, "UTF-8", newline="\n")
+            print("✅ Created .gitignore")
+    elif gitignore_path.exists():
         gitignore_content = gitignore_path.read_bytes()
         if b"frontend-build" in gitignore_content:
             print("✔️  .gitignore (frontend-build already ignored)")
