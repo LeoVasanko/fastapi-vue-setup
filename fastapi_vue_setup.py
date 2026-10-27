@@ -1499,9 +1499,15 @@ def ensure_frontend(
     if not vue_args:
         print("(Follow the prompts to configure your Vue app)")
     print()
-    result = subprocess.run(create_cmd, cwd=project_dir, check=False)  # noqa: S603
-    if result.returncode != 0:
-        print("❌ create-vue failed")
+    try:
+        result = subprocess.run(create_cmd, cwd=project_dir, check=False)  # noqa: S603
+    except KeyboardInterrupt:
+        print("\n❌ create-vue interrupted")
+        return False
+    # create-vue exits 0 when its prompts are cancelled, so a zero return
+    # code alone doesn't mean a project was created.
+    if result.returncode != 0 or not package_json.exists():
+        print("❌ create-vue failed or was cancelled")
         return False
 
     return True
